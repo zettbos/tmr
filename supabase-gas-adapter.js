@@ -1275,6 +1275,8 @@
                         const parts = lastFuelDate.split('-');
                         if (parts.length === 3) lastFuelDate = parts[2] + '/' + parts[1] + '/' + parts[0];
                     }
+                    const hasFuelTx = v.total_fuel_liters > 0 && v.last_fuel_date;
+                    const cleanFuelDate = (hasFuelTx && lastFuelDate !== '-') ? lastFuelDate : '-';
 
                     return {
                         id_kendaraan: v.id,
@@ -1282,9 +1284,9 @@
                         jenis_mobil: v.vehicle_type,
                         nama_sopir: v.default_driver || '-',
                         km_terkini: v.current_km,
-                        tgl_km_terkini: lastFuelDate !== '-' ? lastFuelDate : '-',
+                        tgl_km_terkini: cleanFuelDate,
                         isi_terakhir_liter: v.total_fuel_liters > 0 ? v.total_fuel_liters : 0,
-                        tgl_terakhir_bbm: lastFuelDate,
+                        tgl_terakhir_bbm: cleanFuelDate,
                         konsumsi_bbm: konsumsiBbm,
                         km_terakhir_ganti_oli: v.last_oil_km,
                         interval_oli: v.oil_interval_km || 5000,
@@ -1699,8 +1701,9 @@
                     .select('*')
                     .eq('status', 'PENDING')
                     .order('created_at', { ascending: false });
-                if (error || !data) return { success: true, data: [] };
-                const mapped = data.map(r => ({
+                if (error || !data || !Array.isArray(data)) return { success: true, data: [] };
+                const valid = data.filter(r => r && r.driver_id && r.driver_name && r.requested_helper);
+                const mapped = valid.map(r => ({
                     driverId: r.driver_id,
                     driverName: r.driver_name,
                     prevKarnet: r.previous_helper || '-',
@@ -1743,22 +1746,558 @@
         },
 
         // --- MODUL SOP HARIAN ---
-        getSopDashboardData: async function() {
+        getSopDashboardData: async function(currentUser) {
             const sb = getClient();
-            if (!sb) return { total: 0, sops: [] };
+            if (!sb) return { success: false, stats: { total_sop: 0, draft: 0, terjadwal: 0, selesai: 0, dalam_proses: 0 }, sop_terbaru: [] };
 
-            const { data } = await sb.from('sop_masters').select('*, sop_steps(*), sop_targets(*)');
-            return {
-                total: data?.length || 0,
-                sops: data || []
-            };
+            try {
+                const [mastersRes, targetsRes, logsRes] = await Promise.all([
+                    sb.from('sop_masters').select('*').order('created_at', { ascending: false }),
+                    sb.from('sop_targets').select('*'),
+                    sb.from('sop_execution_logs').select('*')
+                ]);
+
+                const masters = mastersRes.data || [];
+                const targets = targetsRes.data || [];
+                const logs = logsRes.data || [];
+
+                const targetMap = {};
+                targets.forEach(t => {
+                    targetMap[t.sop_id] = t;
+                });
+
+                let totalSop = 0;
+                let draftCount = 0;
+                let terbitHariIni = 0;
+                let selesaiHariIni = 0;
+                let dalamProsesHariIni = 0;
+
+                const allItems = [];
+
+                masters.forEach(m => {
+                    totalSop++;
+                    const st = (m.status || 'Draft').trim();
+                    const stLower = st.toLowerCase();
+                    if (stLower === 'draft') draftCount++;
+                    else if (stLower === 'selesai') selesaiHariIni++;
+                    else if (stLower === 'belum selesai' || stLower === 'proses' || stLower === 'dalam proses') dalamProsesHariIni++;
+                    else terbitHariIni++; // 'Terjadwal' / 'Terbit'
+
+                    const t = targetMap[m.id] || {};
+                    let times = t.schedule_times || ['22.32 WITA'];
+                    if (typeof times === 'string') {
+                        try { times = JSON.parse(times); } catch(e) { times = [times]; }
+                    }
+
+                    const targetUsers = t.target_users || [];
+                    const completedLogs = logs.filter(l => l.sop_id === m.id && (l.approval_status === 'Selesai' || l.approval_status === 'Disetujui'));
+
+                    let createdAtStr = m.created_at || '2026-10-25T22:29:00';
+                    let cDateStr = '25-10-2026 22:29 WITA';
+                    if (createdAtStr) {
+                        try {
+                            const dt = new Date(createdAtStr);
+                            const d = String(dt.getDate()).padStart(2, '0');
+                            const mo = String(dt.getMonth() + 1).padStart(2, '0');
+                            const y = dt.getFullYear();
+                            const hh = String(dt.getHours()).padStart(2, '0');
+                            const mm = String(dt.getMinutes()).padStart(2, '0');
+                            cDateStr = `${d}-${mo}-${y} ${hh}:${mm} WITA`;
+                        } catch(e) {}
+                    }
+
+                    allItems.push({
+                        id_sop: m.id,
+                        judul_sop: m.title || '-',
+                        kategori: m.category || 'Pengantaran',
+                        tingkat_kepentingan: m.priority || 'Wajib',
+                        status: st,
+                        created_at: cDateStr,
+                        created_by: m.created_by || 'Admin',
+                        jadwal: {
+                            jam_tayang: times,
+                            is_berulang_harian: t.is_recurring_daily !== false,
+                            tgl_terbit: t.start_date || '2026-10-25',
+                            target_roles: t.target_roles || [],
+                            target_users: targetUsers
+                        },
+                        multi_user_progress: {
+                            completed_users: completedLogs.map(l => l.user_name),
+                            completed_count: completedLogs.length,
+                            target_count: 2,
+                            percent: 0,
+                            text: '0/2 User (0%)'
+                        }
+                    });
+                });
+
+                return {
+                    success: true,
+                    stats: {
+                        total_sop: totalSop,
+                        draft: draftCount,
+                        terjadwal: terbitHariIni,
+                        sop_terbit: terbitHariIni,
+                        selesai: selesaiHariIni,
+                        dalam_proses: dalamProsesHariIni,
+                        belum_selesai: dalamProsesHariIni
+                    },
+                    sop_terbaru: allItems.slice(0, 3)
+                };
+            } catch (err) {
+                console.error('[Adapter getSopDashboardData error]', err);
+                return { success: false, stats: { total_sop: 0, draft: 0, terjadwal: 0, selesai: 0, dalam_proses: 0 }, sop_terbaru: [] };
+            }
         },
 
-        getSopList: async function() {
+        getSopList: async function(currentUser, filterStatus, searchQuery) {
             const sb = getClient();
-            if (!sb) return [];
-            const { data } = await sb.from('sop_masters').select('*, sop_steps(*), sop_targets(*)').order('created_at', { ascending: false });
-            return data || [];
+            if (!sb) return { success: false, data: [], counts: { semua: 0, aktif: 0, draft: 0, terbit: 0 } };
+
+            try {
+                const [mastersRes, stepsRes, targetsRes] = await Promise.all([
+                    sb.from('sop_masters').select('*').order('created_at', { ascending: false }),
+                    sb.from('sop_steps').select('*').order('step_number', { ascending: true }),
+                    sb.from('sop_targets').select('*')
+                ]);
+
+                const masters = Array.isArray(mastersRes?.data) ? mastersRes.data : [];
+                const steps = Array.isArray(stepsRes?.data) ? stepsRes.data : [];
+                const targets = Array.isArray(targetsRes?.data) ? targetsRes.data : [];
+
+                const stepsMap = {};
+                steps.forEach(s => {
+                    if (!stepsMap[s.sop_id]) stepsMap[s.sop_id] = [];
+                    stepsMap[s.sop_id].push({
+                        id_langkah: s.id,
+                        judul_langkah: s.step_title || s.step_name || 'Langkah',
+                        instruksi_langkah: s.user_instructions || s.instructions || '',
+                        items_checklist: s.checklist || s.checklist_items || [],
+                        rules: s.rules || {}
+                    });
+                });
+
+                const targetMap = {};
+                targets.forEach(t => {
+                    targetMap[t.sop_id] = t;
+                });
+
+                let countSemua = 0;
+                let countAktif = 0;
+                let countDraft = 0;
+                let countTerbit = 0;
+
+                const list = masters.map(m => {
+                    countSemua++;
+                    const st = (m.status || 'Draft').trim();
+                    if (st.toLowerCase() === 'draft') countDraft++;
+                    else if (st.toLowerCase() === 'terjadwal' || st.toLowerCase() === 'terbit') countTerbit++;
+                    else countAktif++;
+
+                    const t = targetMap[m.id] || {};
+                    let times = t.schedule_times || ['22.32 WITA'];
+                    if (typeof times === 'string') {
+                        try { times = JSON.parse(times); } catch(e) { times = [times]; }
+                    }
+
+                    return {
+                        id_sop: m.id,
+                        judul_sop: m.title || '-',
+                        kategori: m.category || 'Pengantaran',
+                        tingkat_kepentingan: m.priority || 'Wajib',
+                        status: st,
+                        langkah: stepsMap[m.id] || [],
+                        jadwal: {
+                            jam_tayang: times,
+                            is_berulang_harian: t.is_recurring_daily !== false,
+                            tgl_terbit: t.start_date || '2026-10-25',
+                            target_roles: t.target_roles || [],
+                            target_users: t.target_users || []
+                        },
+                        penerima_users: t.target_users || [],
+                        multi_user_progress: {
+                            completed_users: [],
+                            completed_count: 0,
+                            target_count: 2,
+                            percent: 0,
+                            text: '0/2 User (0%)'
+                        }
+                    };
+                });
+
+                return {
+                    success: true,
+                    data: list,
+                    counts: {
+                        semua: countSemua,
+                        aktif: countAktif,
+                        draft: countDraft,
+                        terbit: countTerbit
+                    }
+                };
+            } catch (err) {
+                console.error('[Adapter getSopList error]', err);
+                return { success: false, data: [], counts: { semua: 0, aktif: 0, draft: 0, terbit: 0 } };
+            }
+        },
+
+        getSopDetail: async function(idSop) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const [mRes, sRes, tRes] = await Promise.all([
+                    sb.from('sop_masters').select('*').eq('id', idSop).single(),
+                    sb.from('sop_steps').select('*').eq('sop_id', idSop).order('step_number', { ascending: true }),
+                    sb.from('sop_targets').select('*').eq('sop_id', idSop).single()
+                ]);
+
+                if (!mRes.data) return { success: false, message: 'SOP tidak ditemukan' };
+                const m = mRes.data;
+                const steps = sRes.data || [];
+                const t = tRes.data || {};
+
+                let times = t.schedule_times || ['22.32 WITA'];
+                if (typeof times === 'string') {
+                    try { times = JSON.parse(times); } catch(e) { times = [times]; }
+                }
+
+                return {
+                    success: true,
+                    sop: {
+                        id_sop: m.id,
+                        judul_sop: m.title || '-',
+                        kategori: m.category || 'Pengantaran',
+                        tingkat_kepentingan: m.priority || 'Wajib',
+                        status: m.status || 'Draft',
+                        created_by: m.created_by || 'Admin',
+                        created_at: m.created_at,
+                        langkah: steps.map(s => ({
+                            id_langkah: s.id,
+                            judul_langkah: s.step_title || s.step_name || 'Langkah',
+                            instruksi_langkah: s.user_instructions || s.instructions || '',
+                            items_checklist: s.checklist || s.checklist_items || [],
+                            rules: s.rules || {}
+                        })),
+                        jadwal: {
+                            jam_tayang: times,
+                            is_berulang_harian: t.is_recurring_daily !== false,
+                            tgl_terbit: t.start_date || '2026-10-25',
+                            target_roles: t.target_roles || [],
+                            target_users: t.target_users || []
+                        },
+                        penerima_users: t.target_users || []
+                    }
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- LAPORAN KOMISI PENGANTARAN ---
+        getCommissionReport: async function(filterOptions, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+
+            try {
+                const opt = filterOptions || {};
+                const filterDariTanggal = opt.dariTanggal ? String(opt.dariTanggal).trim() : '';
+                const filterSampaiTanggal = opt.sampaiTanggal ? String(opt.sampaiTanggal).trim() : '';
+                const filterPeriode = opt.periode || 'semua';
+                const filterHari = opt.hari ? String(opt.hari).trim() : '';
+                const filterBulan = opt.bulan ? String(opt.bulan).trim() : '';
+                const filterTahun = opt.tahun ? String(opt.tahun).trim() : '';
+                const filterSopir = opt.sopir ? String(opt.sopir).trim().toLowerCase() : '';
+                const filterKarnet = opt.karnet ? String(opt.karnet).trim().toLowerCase() : '';
+                const filterPelanggan = opt.pelanggan ? String(opt.pelanggan).trim().toLowerCase() : '';
+
+                const [ordersRes, configsRes, profilesRes] = await Promise.all([
+                    sb.from('orders').select('*').order('created_at', { ascending: true }),
+                    sb.from('system_configs').select('*'),
+                    sb.from('profiles').select('*')
+                ]);
+
+                const configsMap = {};
+                (configsRes.data || []).forEach(c => { configsMap[c.key] = c.value; });
+
+                const rateSopir = parseFloat(configsMap['COMMISSION_RATE_SOPIR'] || '0.20');
+                const rateKarnet = parseFloat(configsMap['COMMISSION_RATE_KARNET'] || '0.10');
+                const targetPopupAccess = configsMap['DRIVER_TARGET_POPUP_ACCESS'] || 'ON';
+
+                const activeDriversList = [];
+                const activeKarnetsList = [];
+                (profilesRes.data || []).forEach(p => {
+                    const r = (p.role || '').toLowerCase();
+                    const n = (p.full_name || '').replace(/\s+/g, ' ').trim();
+                    if (p.is_active !== false && n) {
+                        if (r.includes('sopir') && !activeDriversList.includes(n)) activeDriversList.push(n);
+                        if ((r.includes('karnet') || r.includes('sopir')) && !activeKarnetsList.includes(n)) activeKarnetsList.push(n);
+                    }
+                });
+
+                const activeCustomersList = [];
+                const reportList = [];
+                let grandTotalNota = 0;
+                let grandTotalSopir = 0;
+                let grandTotalKarnet = 0;
+                let grandTotalKomisi = 0;
+
+                const daysIndo = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+                const now = new Date();
+                const currentYear = now.getFullYear().toString();
+                const currentMonthNum = (now.getMonth() + 1).toString();
+                const currentDayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+                (ordersRes.data || []).forEach(o => {
+                    const namaPelanggan = (o.customer_name || '-').trim();
+                    if (namaPelanggan && !activeCustomersList.includes(namaPelanggan)) activeCustomersList.push(namaPelanggan);
+
+                    const statusPengiriman = (o.delivery_status || 'Pesanan Masuk').trim();
+                    const rawSopir = (o.driver_name || '').trim();
+                    const catatanNota = (o.notes || '').trim();
+                    let cleanNota = Number(o.total_amount || 0);
+
+                    let karnetNama = '-';
+                    const matchKarnetInDriver = rawSopir.match(/\(([^)]+)\)/);
+                    const matchKarnetInNote = catatanNota.match(/\(([^)]+)\)/);
+                    if (matchKarnetInDriver) {
+                        karnetNama = matchKarnetInDriver[1].trim();
+                    } else if (matchKarnetInNote) {
+                        karnetNama = matchKarnetInNote[1].trim();
+                    } else if (o.helper_name && o.helper_name !== '-') {
+                        karnetNama = o.helper_name.trim();
+                    }
+
+                    let sopirNama = rawSopir.replace(/\s*\([^)]+\)/g, '').replace(/\s+/g, ' ').trim();
+                    if (!sopirNama) sopirNama = 'Semua Sopir';
+
+                    const hasKarnet = karnetNama && karnetNama !== '-' && karnetNama !== 'Sendiri (Tanpa Karnet)';
+                    const displayKarnet = hasKarnet ? karnetNama : '-';
+
+                    // Parse Date
+                    const rawDateVal = o.delivery_date || o.order_date || o.created_at;
+                    let dObj = null;
+                    if (rawDateVal) {
+                        try { dObj = new Date(rawDateVal); } catch(e) {}
+                    }
+                    const dateYMD = (dObj && !isNaN(dObj.getTime())) ? `${dObj.getFullYear()}-${String(dObj.getMonth() + 1).padStart(2, '0')}-${String(dObj.getDate()).padStart(2, '0')}` : '';
+                    const dateDisplay = (dObj && !isNaN(dObj.getTime())) ? `${String(dObj.getDate()).padStart(2, '0')}/${String(dObj.getMonth() + 1).padStart(2, '0')}/${dObj.getFullYear()}` : '-';
+                    const dayNameIndo = (dObj && !isNaN(dObj.getTime())) ? daysIndo[dObj.getDay()] : '-';
+                    const monthNumStr = (dObj && !isNaN(dObj.getTime())) ? (dObj.getMonth() + 1).toString() : '';
+                    const yearStr = (dObj && !isNaN(dObj.getTime())) ? dObj.getFullYear().toString() : '';
+
+                    // Filters
+                    if (filterDariTanggal && dateYMD && dateYMD < filterDariTanggal) return;
+                    if (filterSampaiTanggal && dateYMD && dateYMD > filterSampaiTanggal) return;
+                    if (filterPeriode === 'hari' && dateYMD !== currentDayStr) return;
+                    if (filterPeriode === 'bulan' && monthNumStr !== currentMonthNum) return;
+                    if (filterPeriode === 'tahun' && yearStr !== currentYear) return;
+                    if (filterHari && filterHari !== 'semua' && dayNameIndo !== filterHari) return;
+                    if (filterBulan && filterBulan !== 'semua' && monthNumStr !== filterBulan) return;
+                    if (filterTahun && filterTahun !== 'semua' && yearStr !== filterTahun) return;
+                    if (filterPelanggan && filterPelanggan !== 'semua') {
+                        if (!namaPelanggan.toLowerCase().includes(filterPelanggan) && !o.id.toLowerCase().includes(filterPelanggan)) return;
+                    }
+                    if (filterSopir && filterSopir !== 'semua') {
+                        if (sopirNama.toLowerCase() !== filterSopir) return;
+                    }
+                    if (filterKarnet && filterKarnet !== 'semua') {
+                        if (filterKarnet === 'tanpa karnet' || filterKarnet === 'sendiri') {
+                            if (hasKarnet) return;
+                        } else {
+                            if (!hasKarnet || displayKarnet.toLowerCase() !== filterKarnet) return;
+                        }
+                    }
+
+                    // Hitung tambahan nota
+                    let totalTambahanTerkirim = 0;
+                    const matchTotalTambahan = catatanNota.match(/\[TOTAL_TAMBAHAN_TERKIRIM:\s*(\d+)\]/i);
+                    if (matchTotalTambahan && matchTotalTambahan[1]) {
+                        totalTambahanTerkirim = parseInt(matchTotalTambahan[1], 10) || 0;
+                    } else {
+                        const reTot = /\[ORDERAN TAMBAHAN\s*\(Nilai:\s*Rp\s*([0-9.,]+)/gi;
+                        let mTot;
+                        while ((mTot = reTot.exec(catatanNota)) !== null) {
+                            if (mTot[1]) totalTambahanTerkirim += parseInt(mTot[1].replace(/[^0-9]/g, ''), 10) || 0;
+                        }
+                    }
+                    const acuanKomisi = cleanNota + totalTambahanTerkirim;
+
+                    let komisiSopir = null;
+                    let komisiKarnet = null;
+                    let totalKomisi = null;
+
+                    if (statusPengiriman === 'Selesai') {
+                        komisiSopir = Math.round(acuanKomisi * (rateSopir / 100));
+                        komisiKarnet = hasKarnet ? Math.round(acuanKomisi * (rateKarnet / 100)) : 0;
+                        totalKomisi = komisiSopir + komisiKarnet;
+
+                        grandTotalNota += acuanKomisi;
+                        grandTotalSopir += komisiSopir;
+                        grandTotalKarnet += komisiKarnet;
+                        grandTotalKomisi += totalKomisi;
+                    }
+
+                    reportList.push({
+                        id_order: o.id,
+                        tanggal: dateDisplay,
+                        hari: dayNameIndo,
+                        nama_pelanggan: namaPelanggan,
+                        sopir: sopirNama,
+                        karnet: displayKarnet,
+                        status_order: statusPengiriman,
+                        total_nota: acuanKomisi,
+                        rate_sopir: rateSopir,
+                        rate_karnet: rateKarnet,
+                        komisi_sopir: komisiSopir,
+                        komisi_karnet: komisiKarnet,
+                        total_komisi: totalKomisi,
+                        is_selesai: (statusPengiriman === 'Selesai')
+                    });
+                });
+
+                return {
+                    success: true,
+                    rateSopir: rateSopir,
+                    rateKarnet: rateKarnet,
+                    targetPopupAccess: targetPopupAccess,
+                    data: reportList,
+                    summary: {
+                        grandTotalNota: grandTotalNota,
+                        grandTotalSopir: grandTotalSopir,
+                        grandTotalKarnet: grandTotalKarnet,
+                        grandTotalKomisi: grandTotalKomisi
+                    },
+                    activeDrivers: activeDriversList,
+                    activeKarnets: activeKarnetsList,
+                    activeCustomers: activeCustomersList.sort()
+                };
+            } catch (err) {
+                console.error('[Adapter getCommissionReport error]', err);
+                return { success: false, message: err.message };
+            }
+        },
+
+        saveCommissionRates: async function(rateSopir, rateKarnet, currentUser, targetPopupAccess) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                await Promise.all([
+                    sb.from('system_configs').upsert({ key: 'COMMISSION_RATE_SOPIR', value: String(rateSopir), description: 'Persentase Komisi Sopir' }),
+                    sb.from('system_configs').upsert({ key: 'COMMISSION_RATE_KARNET', value: String(rateKarnet), description: 'Persentase Komisi Karnet' }),
+                    sb.from('system_configs').upsert({ key: 'DRIVER_TARGET_POPUP_ACCESS', value: String(targetPopupAccess || 'ON'), description: 'Akses Pop-up Driver' })
+                ]);
+                return { success: true, message: 'Pengaturan persentase komisi berhasil disimpan!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- PENGATURAN POP-UP KARNET SOPIR & TUGAS YANG DIJALANKAN ---
+        getKarnetTasks: async function(currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, data: [] };
+            try {
+                const { data } = await sb.from('system_configs').select('value').eq('key', 'KARNET_TASKS_DATA').single();
+                let list = [];
+                if (data && data.value) {
+                    try { list = JSON.parse(data.value); } catch(e) { list = []; }
+                }
+                if (!list || list.length === 0) {
+                    list = [
+                        {
+                            id: 'task_karnet_default',
+                            namaTugas: 'Pop-up Karnet Sopir',
+                            drivers: ['Semua Sopir'],
+                            isAllDrivers: true,
+                            jamPagi: '07.00',
+                            jamSiang: '',
+                            jamSore: '',
+                            frekuensi: '1',
+                            hariAktif: ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'],
+                            status: 'Aktif',
+                            createdAt: '05 Sep 2026 01:30'
+                        }
+                    ];
+                }
+                return { success: true, data: list };
+            } catch (err) {
+                return { success: false, data: [], message: err.message };
+            }
+        },
+
+        saveKarnetTask: async function(taskData, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const { data } = await sb.from('system_configs').select('value').eq('key', 'KARNET_TASKS_DATA').single();
+                let list = [];
+                if (data && data.value) {
+                    try { list = JSON.parse(data.value); } catch(e) { list = []; }
+                }
+                if (!taskData.id) {
+                    taskData.id = 'task_' + Date.now();
+                    const now = new Date();
+                    taskData.createdAt = `${String(now.getDate()).padStart(2, '0')} ${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][now.getMonth()]} ${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                    list.unshift(taskData);
+                } else {
+                    const idx = list.findIndex(t => t.id === taskData.id);
+                    if (idx >= 0) list[idx] = { ...list[idx], ...taskData };
+                    else list.unshift(taskData);
+                }
+                await sb.from('system_configs').upsert({
+                    key: 'KARNET_TASKS_DATA',
+                    value: JSON.stringify(list),
+                    description: 'Daftar Tugas Pop-up Karnet Sopir Aktif'
+                });
+                return { success: true, message: 'Tugas Pop-Up berhasil disimpan!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteKarnetTask: async function(taskId, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const { data } = await sb.from('system_configs').select('value').eq('key', 'KARNET_TASKS_DATA').single();
+                let list = [];
+                if (data && data.value) {
+                    try { list = JSON.parse(data.value); } catch(e) { list = []; }
+                }
+                list = list.filter(t => t.id !== taskId);
+                await sb.from('system_configs').upsert({
+                    key: 'KARNET_TASKS_DATA',
+                    value: JSON.stringify(list),
+                    description: 'Daftar Tugas Pop-up Karnet Sopir Aktif'
+                });
+                return { success: true, message: 'Tugas Pop-Up berhasil dihapus!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        toggleKarnetTaskStatus: async function(taskId, newStatus, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const { data } = await sb.from('system_configs').select('value').eq('key', 'KARNET_TASKS_DATA').single();
+                let list = [];
+                if (data && data.value) {
+                    try { list = JSON.parse(data.value); } catch(e) { list = []; }
+                }
+                const task = list.find(t => t.id === taskId);
+                if (task) {
+                    task.status = newStatus;
+                    await sb.from('system_configs').upsert({
+                        key: 'KARNET_TASKS_DATA',
+                        value: JSON.stringify(list),
+                        description: 'Daftar Tugas Pop-up Karnet Sopir Aktif'
+                    });
+                }
+                return { success: true, message: 'Status tugas diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
         }
     };
 
