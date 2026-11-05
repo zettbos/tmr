@@ -162,6 +162,7 @@
             return {
                 success: true,
                 user: userObj,
+                data: userObj,
                 token: token,
                 expires_at: expiresAt
             };
@@ -1071,21 +1072,23 @@
         let _successHandler = function(res) {};
         let _failureHandler = function(err) { console.error('[Adapter Error]', err); };
 
+        let proxy = null;
+
         const runner = {
             withSuccessHandler: function(cb) {
                 _successHandler = cb;
-                return runner;
+                return proxy;
             },
             withFailureHandler: function(cb) {
                 _failureHandler = cb;
-                return runner;
+                return proxy;
             },
             withUserObject: function(obj) {
-                return runner;
+                return proxy;
             }
         };
 
-        return new Proxy(runner, {
+        proxy = new Proxy(runner, {
             get: function(target, prop) {
                 if (prop === 'withSuccessHandler' || prop === 'withFailureHandler' || prop === 'withUserObject') {
                     return target[prop];
@@ -1112,6 +1115,8 @@
                 };
             }
         });
+
+        return proxy;
     }
 
     // Pasang ke window.google.script.run
