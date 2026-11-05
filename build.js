@@ -8,8 +8,11 @@ const rootDir = path.resolve(__dirname, '..');
 
 console.log('[Build] Mengompilasi aplikasi TB Delivery PRO ke tb-delivery-pro/index.html...');
 
-// Baca index.html utama dari root
-const sourceIndexPath = path.join(rootDir, 'index.html');
+// Baca index.html utama dari root atau backup
+let sourceIndexPath = path.join(rootDir, 'index.html');
+if (!fs.existsSync(sourceIndexPath)) {
+    sourceIndexPath = path.join(rootDir, '_legacy_gas_backup', 'index.html');
+}
 let indexHtml = fs.readFileSync(sourceIndexPath, 'utf-8');
 
 // Regex untuk mencocokkan <?!= include('namaFile'); ?>
@@ -18,7 +21,10 @@ const includeRegex = /<\?!\=\s*include\(['"]([^'"]+)['"]\);?\s*\?>/g;
 let matchCount = 0;
 indexHtml = indexHtml.replace(includeRegex, (match, filename) => {
     matchCount++;
-    const modulePath = path.join(rootDir, `${filename}.html`);
+    let modulePath = path.join(rootDir, `${filename}.html`);
+    if (!fs.existsSync(modulePath)) {
+        modulePath = path.join(rootDir, '_legacy_gas_backup', `${filename}.html`);
+    }
     if (fs.existsSync(modulePath)) {
         console.log(`[Include] Menggabungkan modul: ${filename}.html`);
         return fs.readFileSync(modulePath, 'utf-8');
