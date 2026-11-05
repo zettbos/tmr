@@ -250,6 +250,47 @@
             };
         },
 
+        // --- PELACAKAN RESI PUBLIK ---
+        getPublicTrackingData: async function(idOrder) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database belum terhubung.' };
+            const cleanId = String(idOrder || '').trim();
+            if (!cleanId) return { success: false, message: 'Nomor resi tidak boleh kosong.' };
+
+            console.log('[Adapter getPublicTrackingData]', cleanId);
+
+            const { data, error } = await sb
+                .from('orders')
+                .select('*')
+                .or(`id.ilike.${cleanId},customer_phone.ilike.%${cleanId}%`)
+                .limit(1)
+                .maybeSingle();
+
+            if (error || !data) {
+                return { success: false, message: `Data pesanan "${cleanId}" tidak ditemukan! Mohon periksa kembali nomor resi pesanan Anda.` };
+            }
+
+            const buktiFotos = [data.proof_url_1, data.proof_url_2, data.proof_url_3, data.proof_url_4, data.proof_url_5].filter(Boolean);
+
+            return {
+                success: true,
+                data: {
+                    id_order: data.id,
+                    tanggal_order: data.order_date || '',
+                    nama_pelanggan: data.customer_name || '',
+                    alamat_lengkap: data.customer_address || '',
+                    detail_barang: data.items_detail || 'Sesuai Nota',
+                    nama_sopir: data.driver_name || 'Semua Sopir',
+                    status_pengiriman: data.delivery_status || 'Pesanan Masuk / Dimuat',
+                    status_pembayaran: data.payment_status || 'Belum Bayar',
+                    ongkir: data.shipping_cost || 0,
+                    total_nilai_nota: data.total_amount || 0,
+                    url_foto_nota: data.nota_photo_url || '',
+                    bukti_fotos: buktiFotos
+                }
+            };
+        },
+
         // --- OPERASIONAL ORDERS & PENGANTARAN ---
         getOrders: async function(filterOpt) {
             const sb = getClient();
