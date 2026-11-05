@@ -1,0 +1,66 @@
+-- ============================================================================
+-- SQL SCRIPT: ZERO RLS & AKTIFKAN SUPABASE REALTIME REPLICATION
+-- SISTEM: TMR (Tamara Delivery PRO)
+-- Dibuat oleh: ZettBOT by Zettbos
+-- Petunjuk: Jalankan script ini 1x di SQL Editor Supabase Dashboard Anda.
+-- ============================================================================
+
+-- 1. NONAKTIFKAN ROW LEVEL SECURITY (ZERO RLS) PADA SELURUH 22 TABEL
+ALTER TABLE IF EXISTS public.profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.orders DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.orders_archive DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.customers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.vehicles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.fuel_approvals DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.fuel_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.oil_change_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.vehicle_services DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.vehicle_taxes DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.tax_payment_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.tax_reminder_settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.suppliers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.incoming_goods DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.activity_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.system_configs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.emergency_messages DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.sop_masters DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.sop_steps DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.sop_targets DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.sop_execution_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.auth_tokens DISABLE ROW LEVEL SECURITY;
+
+-- 2. SET REPLICA IDENTITY FULL AGAR SELURUH KOLOM TERKIRIM VIA REALTIME WEBSOCKET
+ALTER TABLE IF EXISTS public.orders REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.fuel_approvals REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.activity_logs REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.sop_execution_logs REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.profiles REPLICA IDENTITY FULL;
+
+-- 3. DAFTARKAN TABEL KE PUBLIKASI SUPABASE REALTIME
+DO $$
+BEGIN
+    BEGIN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+
+    BEGIN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.fuel_approvals;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+
+    BEGIN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.activity_logs;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+
+    BEGIN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.sop_execution_logs;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+
+    BEGIN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+END $$;

@@ -969,5 +969,108 @@
         configurable: true
     });
 
-    console.log('[Supabase Adapter v3.0] Universal Adapter BERHASIL diaktifkan penuh!');
+    // =========================================================================
+    // 4. GOOGLE DRIVE CDN PHOTO HELPER (lh3.googleusercontent.com)
+    // =========================================================================
+    async function uploadToGoogleDriveCdn(base64Data, filenamePrefix) {
+        if (!base64Data || typeof base64Data !== 'string' || base64Data.length < 50) return '';
+        if (base64Data.startsWith('http://') || base64Data.startsWith('https://')) return base64Data;
+
+        const gasEndpoint = window.__TB_GAS_BACKEND_URL;
+        if (gasEndpoint) {
+            try {
+                console.log('[Drive CDN] Mengunggah foto ke Google Drive CDN via GAS...');
+                const res = await fetch(gasEndpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({
+                        action: 'uploadFileDirectToDrive',
+                        base64Data: base64Data,
+                        filenamePrefix: filenamePrefix || 'tmr_photo'
+                    })
+                });
+                const json = await res.json();
+                if (json && json.success && json.url) {
+                    console.log('[Drive CDN] Sukses mendapatkan URL lh3:', json.url);
+                    return json.url;
+                }
+            } catch (err) {
+                console.warn('[Drive CDN Warning] Gagal upload ke GAS Drive, menggunakan fallback:', err);
+            }
+        }
+        return base64Data;
+    }
+    window.__uploadToGoogleDriveCdn = uploadToGoogleDriveCdn;
+
+    // =========================================================================
+    // 5. SUPABASE REALTIME SUBSCRIPTION ENGINE (WEBSOCKETS)
+    // =========================================================================
+    let _realtimeChannel = null;
+    function initSupabaseRealtime() {
+        try {
+            const sb = getClient();
+            if (!sb) {
+                setTimeout(initSupabaseRealtime, 800);
+                return;
+            }
+
+            if (_realtimeChannel) {
+                try { sb.removeChannel(_realtimeChannel); } catch (e) {}
+            }
+
+            console.log('[Realtime TMR] Menghubungkan WebSocket ke Supabase Realtime...');
+            _realtimeChannel = sb.channel('tmr_realtime_stream')
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+                    console.log('[Realtime TMR] Perubahan data order:', payload.eventType, payload.new?.id || payload.old?.id);
+                    
+                    // Notifikasi audio & visual jika order baru diterbitkan
+                    if (payload.eventType === 'INSERT') {
+                        if (typeof window.playNewOrderSound === 'function') {
+                            try { window.playNewOrderSound(); } catch (e) {}
+                        }
+                        if (typeof window.showToast === 'function') {
+                            try { window.showToast(`Pesanan Baru: ${payload.new?.id || ''} (${payload.new?.customer_name || 'Pelanggan'})`, 'success'); } catch (e) {}
+                        }
+                    }
+
+                    // Reload silent daftar orders jika fungsi loadOrders aktif
+                    if (typeof window.loadOrders === 'function') {
+                        try { window.loadOrders(window.currentPage || 1, false, true); } catch (e) {}
+                    }
+
+                    // Reload statistik ringkasan dashboard jika ada
+                    if (typeof window.loadDashboardStats === 'function') {
+                        try { window.loadDashboardStats(); } catch (e) {}
+                    }
+                })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'fuel_approvals' }, (payload) => {
+                    console.log('[Realtime TMR] Perubahan data BBM:', payload.eventType);
+                    if (typeof window.loadRiwayatBBMTable === 'function') {
+                        try { window.loadRiwayatBBMTable(); } catch (e) {}
+                    }
+                })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, (payload) => {
+                    console.log('[Realtime TMR] Log aktivitas baru:', payload.new?.action, payload.new?.user_name);
+                })
+                .subscribe((status, err) => {
+                    console.log('[Realtime TMR] Status koneksi Realtime:', status);
+                    if (status === 'SUBSCRIBED') {
+                        console.log('⚡ [Realtime TMR] Sukses terhubung ke Supabase Realtime! Data akan tersinkronisasi otomatis seketika.');
+                    }
+                });
+
+            window.__tmr_realtime_channel = _realtimeChannel;
+        } catch (err) {
+            console.error('[Realtime TMR Init Error]', err);
+        }
+    }
+
+    // Inisialisasi Realtime otomatis saat DOM siap
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        setTimeout(initSupabaseRealtime, 600);
+    } else {
+        window.addEventListener('DOMContentLoaded', () => setTimeout(initSupabaseRealtime, 600));
+    }
+
+    console.log('[Supabase Adapter v3.0] Universal Adapter & Realtime Engine BERHASIL diaktifkan penuh!');
 })();
