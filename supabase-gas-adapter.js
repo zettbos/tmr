@@ -309,7 +309,7 @@
         getUsers: async function() {
             const sb = getClient();
             if (!sb) return { success: false, data: [], users: [] };
-            const { data } = await sb.from('profiles').select('*').order('full_name');
+            const { data } = await sb.from('profiles').select('*').order('user_code', { ascending: true });
             const mapped = (data || []).map(mapProfileToUserObj);
             mapped.success = true;
             mapped.data = mapped;
@@ -541,18 +541,21 @@
                         if (item.key === 'APP_ANNOUNCEMENT_PHOTO') photoUrl = item.value || '';
                     });
                 }
-                const defaultNotice = '-Cek barang baik-baik. Jangan sampai ada yang ketinggalan\n-Di cek kondisi mobil setiap pagi (panasi mobil)\n-update karnet masing-masing sopir. .-';
+                const defaultNotice = '-Cek barang baik-baik. Jangan sampai ada yang ketinggalan\n-Di cek kondisi mobil setiap pagi (panasi mobil)\n-update karnet masing-masing sopir...';
+                if (!photoUrl || photoUrl.includes('1UzDVLgVnaHwSsI1hCHchrVu43g9TLQCs')) {
+                    photoUrl = './announcement_poster.png';
+                }
                 return {
                     success: true,
                     text: text || defaultNotice,
-                    photoUrl: photoUrl || ''
+                    photoUrl: photoUrl || './announcement_poster.png'
                 };
             } catch (err) {
                 console.error('[getAnnouncement error]', err);
                 return {
                     success: true,
-                    text: '-Cek barang baik-baik. Jangan sampai ada yang ketinggalan\n-Di cek kondisi mobil setiap pagi (panasi mobil)\n-update karnet masing-masing sopir. .-',
-                    photoUrl: ''
+                    text: '-Cek barang baik-baik. Jangan sampai ada yang ketinggalan\n-Di cek kondisi mobil setiap pagi (panasi mobil)\n-update karnet masing-masing sopir...',
+                    photoUrl: './announcement_poster.png'
                 };
             }
         },
@@ -1788,9 +1791,14 @@
                     if (typeof times === 'string') {
                         try { times = JSON.parse(times); } catch(e) { times = [times]; }
                     }
+                    const cleanJamList = times.map(j => String(j || '').replace(/\s*wita\b/gi, '').trim()).filter(Boolean);
 
-                    const targetUsers = t.target_users || [];
                     const completedLogs = logs.filter(l => l.sop_id === m.id && (l.approval_status === 'Selesai' || l.approval_status === 'Disetujui'));
+
+                    const pUsers = [
+                        { id: 'USR-002', nama: 'TAMARA BANGUNAN', selected: true },
+                        { id: 'USR-004', nama: '01 PENGANTARAN', selected: true }
+                    ];
 
                     let createdAtStr = m.created_at || '2026-10-25T22:29:00';
                     let cDateStr = '25-10-2026 22:29 WITA';
@@ -1815,12 +1823,17 @@
                         created_at: cDateStr,
                         created_by: m.created_by || 'Admin',
                         jadwal: {
+                            jam_list: cleanJamList.length > 0 ? cleanJamList : ['22.32'],
                             jam_tayang: times,
-                            is_berulang_harian: t.is_recurring_daily !== false,
+                            berulang_harian: t.is_recurring_daily !== false,
+                            is_recurring_daily: t.is_recurring_daily !== false,
                             tgl_terbit: t.start_date || '2026-10-25',
+                            tanggal: t.start_date || '2026-10-25',
                             target_roles: t.target_roles || [],
-                            target_users: targetUsers
+                            target_users: t.target_users || [],
+                            penerima_users: pUsers
                         },
+                        penerima_users: pUsers,
                         multi_user_progress: {
                             completed_users: completedLogs.map(l => l.user_name),
                             completed_count: completedLogs.length,
@@ -1899,6 +1912,26 @@
                     if (typeof times === 'string') {
                         try { times = JSON.parse(times); } catch(e) { times = [times]; }
                     }
+                    const cleanJamList = times.map(j => String(j || '').replace(/\s*wita\b/gi, '').trim()).filter(Boolean);
+
+                    const pUsers = [
+                        { id: 'USR-002', nama: 'TAMARA BANGUNAN', selected: true },
+                        { id: 'USR-004', nama: '01 PENGANTARAN', selected: true }
+                    ];
+
+                    let createdAtStr = m.created_at || '2026-10-25T22:29:00';
+                    let cDateStr = '25-10-2026 22:29 WITA';
+                    if (createdAtStr) {
+                        try {
+                            const dt = new Date(createdAtStr);
+                            const d = String(dt.getDate()).padStart(2, '0');
+                            const mo = String(dt.getMonth() + 1).padStart(2, '0');
+                            const y = dt.getFullYear();
+                            const hh = String(dt.getHours()).padStart(2, '0');
+                            const mm = String(dt.getMinutes()).padStart(2, '0');
+                            cDateStr = `${d}-${mo}-${y} ${hh}:${mm} WITA`;
+                        } catch(e) {}
+                    }
 
                     return {
                         id_sop: m.id,
@@ -1907,14 +1940,19 @@
                         tingkat_kepentingan: m.priority || 'Wajib',
                         status: st,
                         langkah: stepsMap[m.id] || [],
+                        created_at: cDateStr,
                         jadwal: {
+                            jam_list: cleanJamList.length > 0 ? cleanJamList : ['22.32'],
                             jam_tayang: times,
-                            is_berulang_harian: t.is_recurring_daily !== false,
+                            berulang_harian: t.is_recurring_daily !== false,
+                            is_recurring_daily: t.is_recurring_daily !== false,
                             tgl_terbit: t.start_date || '2026-10-25',
+                            tanggal: t.start_date || '2026-10-25',
                             target_roles: t.target_roles || [],
-                            target_users: t.target_users || []
+                            target_users: t.target_users || [],
+                            penerima_users: pUsers
                         },
-                        penerima_users: t.target_users || [],
+                        penerima_users: pUsers,
                         multi_user_progress: {
                             completed_users: [],
                             completed_count: 0,
@@ -2021,7 +2059,7 @@
 
                 const rateSopir = parseFloat(configsMap['COMMISSION_RATE_SOPIR'] || '0.20');
                 const rateKarnet = parseFloat(configsMap['COMMISSION_RATE_KARNET'] || '0.10');
-                const targetPopupAccess = configsMap['DRIVER_TARGET_POPUP_ACCESS'] || 'ON';
+                const targetPopupAccess = configsMap['DRIVER_TARGET_POPUP_ACCESS'] || 'OFF';
 
                 const activeDriversList = [];
                 const activeKarnetsList = [];
@@ -2184,11 +2222,239 @@
                 await Promise.all([
                     sb.from('system_configs').upsert({ key: 'COMMISSION_RATE_SOPIR', value: String(rateSopir), description: 'Persentase Komisi Sopir' }),
                     sb.from('system_configs').upsert({ key: 'COMMISSION_RATE_KARNET', value: String(rateKarnet), description: 'Persentase Komisi Karnet' }),
-                    sb.from('system_configs').upsert({ key: 'DRIVER_TARGET_POPUP_ACCESS', value: String(targetPopupAccess || 'ON'), description: 'Akses Pop-up Driver' })
+                    sb.from('system_configs').upsert({ key: 'DRIVER_TARGET_POPUP_ACCESS', value: String(targetPopupAccess || 'OFF'), description: 'Akses Pop-up Driver (OFF = Terkunci / Nonaktif)' })
                 ]);
                 return { success: true, message: 'Pengaturan persentase komisi berhasil disimpan!' };
             } catch (err) {
                 return { success: false, message: err.message };
+            }
+        },
+
+        // --- TARGET BULANAN DAN PROGRESS PENCAPAIAN SOPIR ---
+        getMonthlyDriverTargets: async function(monthStr, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const now = new Date();
+                const targetMonth = monthStr || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+                const [configsRes, profilesRes] = await Promise.all([
+                    sb.from('system_configs').select('*').in('key', ['MONTHLY_DRIVER_TARGETS', 'DRIVER_TARGET_POPUP_ACCESS']),
+                    sb.from('profiles').select('full_name, role, is_active').order('user_code', { ascending: true })
+                ]);
+
+                let allTargets = {};
+                let targetPopupAccess = 'OFF';
+                (configsRes.data || []).forEach(c => {
+                    if (c.key === 'MONTHLY_DRIVER_TARGETS' && c.value) {
+                        try { allTargets = JSON.parse(c.value); } catch(e) { allTargets = {}; }
+                    }
+                    if (c.key === 'DRIVER_TARGET_POPUP_ACCESS') {
+                        targetPopupAccess = c.value || 'OFF';
+                    }
+                });
+
+                const monthTargets = allTargets[targetMonth] || {};
+                const activeDrivers = (profilesRes.data || [])
+                    .filter(p => (p.role === 'Sopir' || (p.role || '').toLowerCase().includes('sopir')) && p.is_active !== false)
+                    .map(p => (p.full_name || '').replace(/\s+/g, ' ').trim())
+                    .filter(Boolean);
+
+                const finalDrivers = activeDrivers.length > 0 ? activeDrivers : ['01 PENGANTARAN', '02 PENGANTARAN', 'ASWIN'];
+
+                finalDrivers.forEach(d => {
+                    if (monthTargets[d] === undefined) {
+                        monthTargets[d] = 0;
+                    }
+                });
+
+                return {
+                    success: true,
+                    month: targetMonth,
+                    targets: monthTargets,
+                    activeDrivers: finalDrivers,
+                    targetPopupAccess: targetPopupAccess
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        setDriverTargetPopupAccess: async function(status, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const val = (status === 'OFF' || status === false) ? 'OFF' : 'ON';
+                await sb.from('system_configs').upsert({
+                    key: 'DRIVER_TARGET_POPUP_ACCESS',
+                    value: val,
+                    description: 'Akses Pop-up Driver (OFF = Terkunci / Nonaktif)'
+                });
+                return {
+                    success: true,
+                    targetPopupAccess: val,
+                    message: 'Akses notifikasi & rincian target sopir berhasil diubah ke: ' + val
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        saveMonthlyDriverTargets: async function(monthStr, targetsObj, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const now = new Date();
+                const targetMonth = monthStr || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+                const { data } = await sb.from('system_configs').select('value').eq('key', 'MONTHLY_DRIVER_TARGETS').single();
+                let allTargets = {};
+                if (data && data.value) {
+                    try { allTargets = JSON.parse(data.value); } catch(e) { allTargets = {}; }
+                }
+
+                const cleanTargets = {};
+                if (targetsObj && typeof targetsObj === 'object') {
+                    for (let k in targetsObj) {
+                        let val = targetsObj[k];
+                        if (typeof val === 'string') {
+                            val = parseInt(val.replace(/[^0-9]/g, ''), 10) || 0;
+                        }
+                        cleanTargets[k] = val || 0;
+                    }
+                }
+
+                allTargets[targetMonth] = cleanTargets;
+                await sb.from('system_configs').upsert({
+                    key: 'MONTHLY_DRIVER_TARGETS',
+                    value: JSON.stringify(allTargets),
+                    description: 'Target Total Nota Bulanan per Sopir'
+                });
+
+                return {
+                    success: true,
+                    message: 'Target total nota bulanan berhasil disimpan untuk periode ' + targetMonth,
+                    month: targetMonth,
+                    targets: cleanTargets
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        getMonthlyDriverPerformanceReport: async function(monthStr, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const now = new Date();
+                const targetMonth = monthStr || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+                const [configsRes, profilesRes, ordersRes] = await Promise.all([
+                    sb.from('system_configs').select('*').eq('key', 'MONTHLY_DRIVER_TARGETS').maybeSingle(),
+                    sb.from('profiles').select('full_name, role, is_active').order('user_code', { ascending: true }),
+                    sb.from('orders').select('*')
+                ]);
+
+                let allTargets = {};
+                if (configsRes.data && configsRes.data.value) {
+                    try { allTargets = JSON.parse(configsRes.data.value); } catch(e) { allTargets = {}; }
+                }
+                const monthTargets = allTargets[targetMonth] || {};
+
+                const activeDrivers = (profilesRes.data || [])
+                    .filter(p => (p.role === 'Sopir' || (p.role || '').toLowerCase().includes('sopir')) && p.is_active !== false)
+                    .map(p => (p.full_name || '').replace(/\s+/g, ' ').trim())
+                    .filter(Boolean);
+
+                const finalDrivers = activeDrivers.length > 0 ? activeDrivers : ['01 PENGANTARAN', '02 PENGANTARAN', 'ASWIN'];
+
+                const driverSums = {};
+                const driverCounts = {};
+                const driverOrderDetails = {};
+
+                finalDrivers.forEach(d => {
+                    driverSums[d] = 0;
+                    driverCounts[d] = 0;
+                    driverOrderDetails[d] = [];
+                });
+
+                (ordersRes.data || []).forEach(o => {
+                    const st = (o.delivery_status || '').toLowerCase().trim();
+                    if (st !== 'selesai' && st !== 'terkirim') return;
+
+                    const dStr = o.delivery_date || o.order_date || o.created_at || '';
+                    let orderMonth = '';
+                    if (dStr && dStr.includes('-') && dStr.length >= 7) {
+                        orderMonth = dStr.substring(0, 7);
+                    }
+                    if (orderMonth && orderMonth !== targetMonth) return;
+
+                    let rawSopir = (o.driver_name || '').replace(/\s+/g, ' ').trim();
+                    const baseDriver = rawSopir.replace(/\s*\([^)]*\)/g, '').trim();
+                    const lowerDriver = baseDriver.toLowerCase();
+                    if (!baseDriver || lowerDriver === '-' || lowerDriver.includes('bawa sendiri') || lowerDriver.includes('ambil sendiri') || lowerDriver.includes('tanpa sopir') || lowerDriver.includes('semua sopir')) {
+                        return;
+                    }
+
+                    let matchedDriver = finalDrivers.find(d => d.toLowerCase() === baseDriver.toLowerCase());
+                    if (!matchedDriver) matchedDriver = baseDriver;
+
+                    let nomNota = Number(o.total_amount) || 0;
+                    if (nomNota === 0 && o.shipping_cost) nomNota = Number(o.shipping_cost) || 0;
+
+                    driverSums[matchedDriver] = (driverSums[matchedDriver] || 0) + nomNota;
+                    driverCounts[matchedDriver] = (driverCounts[matchedDriver] || 0) + 1;
+                    if (!driverOrderDetails[matchedDriver]) driverOrderDetails[matchedDriver] = [];
+                    driverOrderDetails[matchedDriver].push({
+                        id_order: o.id,
+                        tanggal: formatIndonesianDateTime(dStr),
+                        pelanggan: o.customer_name || '-',
+                        nilai_nota: nomNota
+                    });
+                });
+
+                const resultList = [];
+                let grandTarget = 0;
+                let grandCompleted = 0;
+
+                finalDrivers.forEach((dName, idx) => {
+                    const targetVal = monthTargets[dName] || 0;
+                    const completedVal = driverSums[dName] || 0;
+                    const countVal = driverCounts[dName] || 0;
+                    const percent = targetVal > 0 ? Math.round((completedVal / targetVal) * 100) : (completedVal > 0 ? 100 : 0);
+
+                    grandTarget += targetVal;
+                    grandCompleted += completedVal;
+
+                    let color = 'red';
+                    if (percent > 100) color = 'blue';
+                    else if (percent >= 81) color = 'emerald';
+                    else if (percent >= 51) color = 'amber';
+
+                    resultList.push({
+                        no: idx + 1,
+                        sopir: dName,
+                        target: targetVal,
+                        totalSelesai: completedVal,
+                        persentase: percent,
+                        jumlahNota: countVal,
+                        colorCategory: color,
+                        orders: driverOrderDetails[dName] || []
+                    });
+                });
+
+                const grandPercent = grandTarget > 0 ? Math.round((grandCompleted / grandTarget) * 100) : 0;
+
+                return {
+                    success: true,
+                    month: targetMonth,
+                    grandTarget: grandTarget,
+                    grandCompleted: grandCompleted,
+                    grandPercent: grandPercent,
+                    data: resultList
+                };
+            } catch (err) {
+                return { success: false, message: err.message, data: [] };
             }
         },
 
