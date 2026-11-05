@@ -54,22 +54,83 @@
     // Helper: Map order Supabase ke format GAS UI
     function mapOrderToGasObj(row) {
         if (!row) return null;
+
+        const rawNotes = row.notes || '';
+        const rawPayStatus = (row.payment_status || '').toLowerCase().trim();
+
+        // Parse nominal tambahan terkirim
+        let nomTambahanTerkirim = 0;
+        const matchTotalTambahan = rawNotes.match(/\[TOTAL_TAMBAHAN_TERKIRIM:\s*(\d+)\]/i);
+        if (matchTotalTambahan && matchTotalTambahan[1]) {
+            nomTambahanTerkirim = parseInt(matchTotalTambahan[1], 10) || 0;
+        } else {
+            const reTot = /\[ORDERAN TAMBAHAN\s*\(Nilai:\s*Rp\s*([0-9.,]+)/gi;
+            let mTot;
+            while ((mTot = reTot.exec(rawNotes)) !== null) {
+                if (mTot[1]) nomTambahanTerkirim += parseInt(mTot[1].replace(/[^0-9]/g, ''), 10) || 0;
+            }
+        }
+
+        // Parse nominal tambahan belum bayar
+        let nomTambahanBelum = 0;
+        const matchTambahanBelum = rawNotes.match(/\[TAMBAHAN_BELUM_BAYAR:\s*(\d+)\]/i);
+        if (matchTambahanBelum && matchTambahanBelum[1]) {
+            nomTambahanBelum = parseInt(matchTambahanBelum[1], 10) || 0;
+        } else {
+            const matchSisaTagihan = rawNotes.match(/\[ORDERAN TAMBAHAN[^\]]*Sisa Tagihan:\s*Rp\s*([0-9.,]+)[^\]]*\]/i);
+            if (matchSisaTagihan && matchSisaTagihan[1]) {
+                nomTambahanBelum = parseInt(matchSisaTagihan[1].replace(/[^0-9]/g, ''), 10) || 0;
+            }
+        }
+
+        // Parse nominal belum bayar dasar
+        let nomBelum = row.unpaid_amount;
+        if (!nomBelum || nomBelum === 0) {
+            const m = rawNotes.match(/\[BELUM_BAYAR_AWAL:\s*(\d+)\]/i) || rawNotes.match(/\[BELUM_BAYAR:\s*(\d+)\]/i);
+            if (m && m[1]) {
+                nomBelum = parseInt(m[1], 10) || 0;
+            } else if (rawPayStatus === 'belum bayar' || rawPayStatus === 'bayar di lokasi' || rawPayStatus.includes('cod')) {
+                nomBelum = row.total_amount || 0;
+            } else {
+                nomBelum = 0;
+            }
+        }
+
+        // Parse karnet
+        let karnetName = row.helper_name || '';
+        if (!karnetName && row.driver_name) {
+            const mK = row.driver_name.match(/\(([^)]+)\)/);
+            if (mK && mK[1]) karnetName = mK[1].trim();
+        }
+        if (!karnetName) {
+            const mN = rawNotes.match(/\[KARNET:\s*([^\]]+)\]/i);
+            if (mN && mN[1]) karnetName = mN[1].trim();
+        }
+
+        // Parse foto muatan
+        let cargoUrl = row.cargo_photo_url || '';
+        if (!cargoUrl) {
+            const matchM = rawNotes.match(/\[FOTO_MUATAN:([^\]]+)\]/i);
+            if (matchM && matchM[1]) cargoUrl = matchM[1].trim();
+        }
+
         return {
             ...row,
             id_order: row.id,
             tanggal_order: row.order_date || '',
             tanggal_pengantaran: row.delivery_date || '',
-            is_urgent: row.is_urgent ? 'Ya' : 'Tidak',
+            is_urgent: (row.is_urgent === true || row.is_urgent === 'Ya' || row.is_urgent === 'true') ? 'Ya' : 'Tidak',
             id_pelanggan: row.customer_id || '',
             nama_pelanggan: row.customer_name || '',
             no_hp_pelanggan: row.customer_phone || '',
             alamat_lengkap: row.customer_address || '',
             link_gmaps: row.maps_url || '',
             url_foto_nota: row.nota_photo_url || '',
-            catatan_nota: row.notes || '',
-            detail_barang: row.items_detail || '',
+            catatan_nota: rawNotes,
+            detail_barang: row.items_detail || 'Sesuai Nota',
             id_sopir: row.driver_id || '',
-            nama_sopir: row.driver_name || '',
+            nama_sopir: row.driver_name || 'Semua Sopir',
+            nama_karnet: karnetName,
             status_verifikasi: row.verification_status || 'Belum di Cek',
             status_pengiriman: row.delivery_status || 'Pesanan Masuk / Dimuat',
             status_pembayaran: row.payment_status || 'Belum Bayar',
@@ -80,15 +141,24 @@
             url_bukti_5: row.proof_url_5 || '',
             tanggal_selesai: row.completed_at || '',
             catatan_pengiriman: row.delivery_notes || '',
+            catatan: row.delivery_notes || '',
             nama_checker: row.checker_name || '',
-            pembuat_order: row.created_by || '',
-            dibuat_oleh: row.created_by || '',
+            pembuat_order: row.created_by || 'Admin',
+            dibuat_oleh: row.created_by || 'Admin',
             url_bukti_transfer: row.transfer_proof_url || '',
             biaya_ongkir: row.shipping_cost || 0,
+            ongkir: row.shipping_cost || 0,
             total_nilai_nota: row.total_amount || 0,
             petugas_pembayaran: row.payment_collector || '',
+            petugas_bayar: row.payment_collector || '',
             url_nota_tambahan: row.additional_nota_url || '',
-            url_foto_uang_lunas: row.cash_proof_url || ''
+            url_foto_uang_lunas: row.cash_proof_url || '',
+            tipe_pengiriman: row.shipping_type || 'Dikirim',
+            url_foto_muatan: cargoUrl,
+            nominal_tambahan_terkirim: nomTambahanTerkirim,
+            nominal_tambahan_belum_bayar: nomTambahanBelum,
+            nominal_belum_bayar: parseInt(String(nomBelum || 0).replace(/[^0-9]/g, ''), 10) || 0,
+            acuan_komisi: (row.total_amount || 0) + nomTambahanTerkirim
         };
     }
 
@@ -197,9 +267,16 @@
 
         getUsers: async function() {
             const sb = getClient();
-            if (!sb) return [];
+            if (!sb) return { success: false, data: [], users: [] };
             const { data } = await sb.from('profiles').select('*').order('full_name');
-            return (data || []).map(mapProfileToUserObj);
+            const mapped = (data || []).map(mapProfileToUserObj);
+            mapped.success = true;
+            mapped.data = mapped;
+            return {
+                success: true,
+                data: mapped,
+                users: mapped
+            };
         },
 
         saveUser: async function(userData) {
@@ -235,19 +312,108 @@
         // --- DASHBOARD & METRICS ---
         getDashboardData: async function() {
             const sb = getClient();
-            if (!sb) return { orders: [], customers: [], stats: {} };
+            if (!sb) return { success: false, stats: {}, driverStats: {}, logs: [] };
 
-            const [ordersRes, custRes, vehiclesRes] = await Promise.all([
-                sb.from('orders').select('*').order('created_at', { ascending: false }).limit(100),
-                sb.from('customers').select('*').limit(50),
-                sb.from('vehicles').select('*')
+            const [ordersRes, profilesRes, logsRes] = await Promise.all([
+                sb.from('orders').select('*').order('created_at', { ascending: false }),
+                sb.from('profiles').select('*').order('full_name'),
+                sb.from('activity_logs').select('*').order('timestamp', { ascending: false }).limit(20)
             ]);
+
+            const stats = {
+                total: 0,
+                menungguPenugasan: 0,
+                siapDimuat: 0,
+                dalamPengantaran: 0,
+                selesai: 0,
+                kirimanSopir1: 0,
+                kirimanSopir2: 0,
+                kirimanTerjadwal: 0,
+                urgent: 0,
+                belumBayar: 0
+            };
+
+            const driverStats = {};
+            (profilesRes.data || []).forEach(p => {
+                if (p.role === 'Sopir' && p.is_active !== false) {
+                    driverStats[p.full_name] = { total: 0, jalan: 0, selesai: 0 };
+                }
+            });
+
+            const allOrders = (ordersRes.data || []).map(mapOrderToGasObj);
+            stats.total = allOrders.length;
+
+            allOrders.forEach(o => {
+                const isSelesai = o.status_pengiriman && (o.status_pengiriman.toLowerCase().includes('selesai') || o.status_pengiriman === 'Terkirim');
+                const isDiBawaSendiri = (o.tipe_pengiriman === 'Di Bawa Sendiri' || o.status_pengiriman === 'Di Bawa Sendiri' || o.nama_sopir === 'Di Bawa Sendiri');
+                const isUnassigned = (!o.id_sopir || o.nama_sopir === 'Semua Sopir' || o.nama_sopir === '-' || o.nama_sopir === 'Pool Job');
+
+                if (!isDiBawaSendiri && isUnassigned && !isSelesai) {
+                    stats.menungguPenugasan++;
+                }
+
+                if (o.status_pengiriman === 'Pesanan Masuk / Dimuat' || o.status_pengiriman === 'Proses Muat Barang' || o.status_pengiriman === 'Sedang Dimuat') {
+                    stats.siapDimuat++;
+                }
+
+                if (o.status_pengiriman === 'Dalam Pengantaran' || o.status_pengiriman === 'Dalam Pengantaran Sebagian') {
+                    stats.dalamPengantaran++;
+                }
+
+                if (isSelesai) {
+                    stats.selesai++;
+                }
+
+                if ((o.catatan_nota && o.catatan_nota.includes('[TITIP BARANG]')) || (o.status_pengiriman && o.status_pengiriman.toLowerCase().includes('titip'))) {
+                    if (!isSelesai) stats.kirimanTerjadwal++;
+                }
+
+                if ((o.is_urgent === 'Ya' || o.is_urgent === true) && !isSelesai) {
+                    stats.urgent++;
+                }
+
+                const sPay = (o.status_pembayaran || '').toLowerCase();
+                const isLunas = sPay === 'lunas' || (sPay.includes('lunas') && !sPay.includes('belum'));
+                const isTransfer = sPay.includes('transfer');
+                if ((!isLunas && !isTransfer) || (o.nominal_tambahan_belum_bayar > 0)) {
+                    stats.belumBayar++;
+                }
+
+                // Driver stats
+                const drvName = o.nama_sopir;
+                if (drvName && drvName !== 'Semua Sopir' && !isDiBawaSendiri) {
+                    let matchedKey = null;
+                    for (let k in driverStats) {
+                        if (drvName.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(drvName.toLowerCase())) {
+                            matchedKey = k;
+                            break;
+                        }
+                    }
+                    if (!matchedKey) {
+                        driverStats[drvName] = { total: 0, jalan: 0, selesai: 0 };
+                        matchedKey = drvName;
+                    }
+                    driverStats[matchedKey].total++;
+                    if (o.status_pengiriman === 'Dalam Pengantaran') driverStats[matchedKey].jalan++;
+                    if (isSelesai) driverStats[matchedKey].selesai++;
+                }
+            });
+
+            const logs = (logsRes.data || []).map(l => ({
+                id_log: l.id,
+                timestamp: l.timestamp ? new Date(l.timestamp).toLocaleString('id-ID') : '',
+                user: l.user_name || 'User',
+                role: l.role || '',
+                aktivitas: l.action || '',
+                detail: l.details || ''
+            }));
 
             return {
                 success: true,
-                orders: (ordersRes.data || []).map(mapOrderToGasObj),
-                customers: custRes.data || [],
-                vehicles: vehiclesRes.data || []
+                stats: stats,
+                driverStats: driverStats,
+                logs: logs,
+                orders: allOrders
             };
         },
 
@@ -292,55 +458,357 @@
             };
         },
 
+        // --- INFORMASI & PENGUMUMAN TOKO ---
+        getAnnouncement: async function() {
+            const sb = getClient();
+            if (!sb) return { success: false, text: '', photoUrl: '' };
+            try {
+                const { data } = await sb.from('system_configs').select('key, value').in('key', ['APP_ANNOUNCEMENT_TEXT', 'APP_ANNOUNCEMENT_PHOTO']);
+                let text = '';
+                let photoUrl = '';
+                if (data && Array.isArray(data)) {
+                    data.forEach(item => {
+                        if (item.key === 'APP_ANNOUNCEMENT_TEXT') text = item.value || '';
+                        if (item.key === 'APP_ANNOUNCEMENT_PHOTO') photoUrl = item.value || '';
+                    });
+                }
+                const defaultNotice = '-Cek barang baik-baik. Jangan sampai ada yang ketinggalan\n-Di cek kondisi mobil setiap pagi (panasi mobil)\n-update karnet masing-masing sopir. .-';
+                return {
+                    success: true,
+                    text: text || defaultNotice,
+                    photoUrl: photoUrl || ''
+                };
+            } catch (err) {
+                console.error('[getAnnouncement error]', err);
+                return {
+                    success: true,
+                    text: '-Cek barang baik-baik. Jangan sampai ada yang ketinggalan\n-Di cek kondisi mobil setiap pagi (panasi mobil)\n-update karnet masing-masing sopir. .-',
+                    photoUrl: ''
+                };
+            }
+        },
+
+        saveAnnouncement: async function(text, photoBase64, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database Supabase tidak terhubung.' };
+            try {
+                let photoUrl = '';
+                if (photoBase64 && photoBase64.trim() !== '') {
+                    if (photoBase64 === '__DELETE__') {
+                        photoUrl = '';
+                    } else if (photoBase64.startsWith('http://') || photoBase64.startsWith('https://')) {
+                        photoUrl = photoBase64;
+                    } else {
+                        const uploadRes = await apiServices.uploadFile(photoBase64, 'announcement_' + Date.now() + '.jpg', 'announcements');
+                        if (uploadRes && uploadRes.success) photoUrl = uploadRes.url;
+                    }
+                }
+
+                const updates = [
+                    { key: 'APP_ANNOUNCEMENT_TEXT', value: text || '', description: 'Teks Pengumuman Toko' }
+                ];
+                if (photoUrl || photoBase64 === '__DELETE__') {
+                    updates.push({ key: 'APP_ANNOUNCEMENT_PHOTO', value: photoUrl, description: 'URL Foto Pengumuman Toko' });
+                }
+
+                await sb.from('system_configs').upsert(updates, { onConflict: 'key' });
+                logActivity(currentUser?.id_user, currentUser?.nama, currentUser?.role, 'UPDATE_ANNOUNCEMENT', 'Memperbarui banner informasi admin');
+                return { success: true, message: 'Informasi pengumuman berhasil disimpan!', text: text, photoUrl: photoUrl };
+            } catch (err) {
+                return { success: false, message: err.toString() };
+            }
+        },
+
         // --- OPERASIONAL ORDERS & PENGANTARAN ---
         getOrders: async function(filterOpt) {
             const sb = getClient();
-            if (!sb) return { success: false, data: [] };
+            if (!sb) return { success: false, data: [], orders: [], counts: {}, pagination: { currentPage: 1, totalPages: 1, totalRecords: 0 } };
 
             filterOpt = filterOpt || {};
-            const page = filterOpt.page || 1;
-            const limit = filterOpt.limit || 50;
+            const page = parseInt(filterOpt.page, 10) || 1;
+            const limit = parseInt(filterOpt.limit, 10) || 20;
+            const search = filterOpt.search ? String(filterOpt.search).toLowerCase().trim() : '';
+            const statusPengiriman = filterOpt.statusPengiriman || '';
+            const statusPembayaran = filterOpt.statusPembayaran || '';
+            const isUrgentFilter = filterOpt.isUrgent || '';
+            const isTitipBarangFilter = filterOpt.isTitipBarang || '';
+            const userRole = filterOpt.userRole || '';
+            const userId = filterOpt.userId ? String(filterOpt.userId) : '';
+            const driverFilter = filterOpt.driverFilter || filterOpt.sopir || '';
 
-            let query = sb.from('orders').select('*', { count: 'exact' });
+            // Query seluruh orders dari Supabase realtime
+            const { data, error } = await sb
+                .from('orders')
+                .select('*')
+                .order('created_at', { ascending: false });
 
-            if (filterOpt.statusPengiriman) {
-                query = query.eq('delivery_status', filterOpt.statusPengiriman);
-            }
-            if (filterOpt.statusPembayaran) {
-                query = query.eq('payment_status', filterOpt.statusPembayaran);
-            }
-            if (filterOpt.search) {
-                query = query.or(`customer_name.ilike.%${filterOpt.search}%,id.ilike.%${filterOpt.search}%,customer_phone.ilike.%${filterOpt.search}%`);
-            }
-
-            query = query.order('created_at', { ascending: false });
-
-            const { data, count, error } = await query;
             if (error) {
                 console.error('[Adapter getOrders error]', error);
-                return { success: false, data: [] };
+                return {
+                    success: false,
+                    message: error.message,
+                    data: [],
+                    orders: [],
+                    counts: {},
+                    pagination: { currentPage: page, totalPages: 1, totalRecords: 0 }
+                };
             }
 
-            const mappedOrders = (data || []).map(mapOrderToGasObj);
+            const allOrders = (data || []).map(mapOrderToGasObj);
+
+            let cntAll = 0;
+            let cntMasuk = 0;
+            let cntMuat = 0;
+            let cntJalan = 0;
+            let cntSelesai = 0;
+            let cntFulljob = 0;
+            let cntUrgent = 0;
+            let cntBelumBayar = 0;
+            let cntTitip = 0;
+            let cntDiBawaSendiri = 0;
+
+            const filtered = [];
+
+            for (let i = 0; i < allOrders.length; i++) {
+                const orderObj = allOrders[i];
+
+                // Identifikasi Di Bawa Sendiri
+                const isDiBawaSendiriItem = (
+                    orderObj.tipe_pengiriman === 'Di Bawa Sendiri' ||
+                    orderObj.status_pengiriman === 'Di Bawa Sendiri' ||
+                    orderObj.status_pengiriman === 'Selesai Di Bawa Sendiri' ||
+                    (orderObj.catatan_nota && orderObj.catatan_nota.includes('[TIPE_PENGIRIMAN:DI_BAWA_SENDIRI]')) ||
+                    orderObj.nama_sopir === 'Di Bawa Sendiri'
+                );
+
+                const isDalamPengantaran = (orderObj.status_pengiriman === 'Dalam Pengantaran' || orderObj.status_pengiriman === 'Dalam Pengantaran Sebagian');
+                const isSisaWaitingNextTrip = (orderObj.status_pengiriman === 'Terkirim Sebagian' || orderObj.status_pengiriman === 'Sisa Kiriman' || (orderObj.status_pengiriman && orderObj.status_pengiriman.toLowerCase().includes('sebagian') && !isDalamPengantaran && !orderObj.status_pengiriman.toLowerCase().includes('selesai')));
+                const isTitipNota = (orderObj.catatan_nota && (orderObj.catatan_nota.toUpperCase().includes('[TITIP BARANG]') || orderObj.catatan_nota.toLowerCase().includes('titip barang'))) ||
+                                    (orderObj.catatan && (orderObj.catatan.toUpperCase().includes('[TITIP BARANG]') || orderObj.catatan.toLowerCase().includes('titip barang')));
+                const isTitipStatus = orderObj.status_pengiriman && orderObj.status_pengiriman.toLowerCase().includes('titip');
+                const isTitipOnly = (isTitipNota || isTitipStatus) && !isDalamPengantaran && !isSisaWaitingNextTrip;
+                const isTitipSisaItem = (isTitipOnly || isSisaWaitingNextTrip) && !isDalamPengantaran;
+                const isSelesaiItem = orderObj.status_pengiriman && (orderObj.status_pengiriman.toLowerCase().includes('selesai') || orderObj.status_pengiriman === 'Terkirim') && !isSisaWaitingNextTrip && !isDalamPengantaran;
+
+                const rawSopirLower = (orderObj.nama_sopir || '').toString().toLowerCase().trim();
+                const rawIdSopirLower = (orderObj.id_sopir || '').toString().toLowerCase().trim();
+                const isUnassignedDriver = (!orderObj.id_sopir || rawIdSopirLower === 'semua sopir' || rawIdSopirLower === '-' || rawIdSopirLower === 'pool job' || !orderObj.nama_sopir || rawSopirLower === '' || rawSopirLower === 'semua sopir' || rawSopirLower === 'semua sopir (pool job)' || rawSopirLower === '-' || rawSopirLower === 'pool job' || rawSopirLower === 'tanpa sopir');
+                const isFullJobItem = !isDiBawaSendiriItem && isUnassignedDriver && !isSelesaiItem && !isTitipSisaItem && !isDalamPengantaran;
+
+                const isViewingFullJob = (isTitipBarangFilter === 'fulljob');
+
+                let isDriverMatchedForCounts = true;
+                if (userRole === 'Sopir') {
+                    if (!isDiBawaSendiriItem) {
+                        if (orderObj.id_sopir && orderObj.id_sopir !== userId && orderObj.nama_sopir !== 'Semua Sopir') {
+                            isDriverMatchedForCounts = false;
+                        }
+                    }
+                }
+                if (!isDiBawaSendiriItem && driverFilter && orderObj.nama_sopir.toLowerCase().indexOf(driverFilter.toLowerCase()) === -1 && orderObj.id_sopir !== driverFilter) {
+                    isDriverMatchedForCounts = false;
+                }
+
+                // 1. HITUNG BADGE COUNTER SEMUA FOLDER (UNIVERSAL)
+                if (isFullJobItem) {
+                    cntFulljob++;
+                }
+
+                if (isDiBawaSendiriItem) {
+                    if (!isSelesaiItem && orderObj.status_pengiriman !== 'Selesai Di Bawa Sendiri') {
+                        cntDiBawaSendiri++;
+                    }
+                } else if (isDriverMatchedForCounts) {
+                    if (!isSelesaiItem) {
+                        cntAll++;
+                    } else {
+                        cntSelesai++;
+                    }
+
+                    if (isTitipSisaItem && !isSelesaiItem) {
+                        cntTitip++;
+                    } else if (!isFullJobItem) {
+                        if (orderObj.status_pengiriman === 'Pesanan Masuk / Dimuat' || orderObj.status_pengiriman === 'Pesanan Masuk') {
+                            cntMasuk++;
+                        }
+                        if (orderObj.status_pengiriman === 'Proses Muat Barang' || orderObj.status_pengiriman === 'Sedang Memuat Barang' || orderObj.status_pengiriman === 'Sedang Dimuat') {
+                            cntMuat++;
+                        }
+                        if (isDalamPengantaran) {
+                            cntJalan++;
+                        }
+                    }
+
+                    if ((orderObj.is_urgent === 'Ya' || orderObj.is_urgent === true) && !isSelesaiItem) {
+                        cntUrgent++;
+                    }
+
+                    // Belum bayar / belum lunas
+                    const payStatusLower = (orderObj.status_pembayaran || '').toLowerCase().trim();
+                    const isLunas = payStatusLower === 'lunas' || (payStatusLower.includes('lunas') && !payStatusLower.includes('belum'));
+                    const isTransfer = payStatusLower.includes('transfer');
+                    const hasUnpaid = !isLunas && !isTransfer;
+                    if (hasUnpaid || (orderObj.catatan_nota && orderObj.catatan_nota.includes('[TAMBAHAN_BELUM_BAYAR:')) || orderObj.nominal_tambahan_belum_bayar > 0) {
+                        cntBelumBayar++;
+                    }
+                }
+
+                // 2. FILTERING UNTUK MENAMPILKAN DATA TAB
+                if (search) {
+                    const matchSearch = (orderObj.id_order || '').toLowerCase().includes(search) ||
+                                        (orderObj.nama_pelanggan || '').toLowerCase().includes(search) ||
+                                        (orderObj.no_hp_pelanggan || '').toLowerCase().includes(search) ||
+                                        (orderObj.alamat_lengkap || '').toLowerCase().includes(search) ||
+                                        (orderObj.detail_barang || '').toLowerCase().includes(search) ||
+                                        (orderObj.nama_sopir || '').toLowerCase().includes(search) ||
+                                        (orderObj.catatan || '').toLowerCase().includes(search) ||
+                                        (orderObj.pembuat_order || '').toLowerCase().includes(search);
+                    if (!matchSearch) continue;
+                }
+
+                if (isViewingFullJob) {
+                    if (!isDiBawaSendiriItem && isFullJobItem && !isTitipSisaItem && !isSelesaiItem && !isDalamPengantaran) {
+                        filtered.push(orderObj);
+                    }
+                    continue;
+                }
+
+                if (!isDiBawaSendiriItem && !isDriverMatchedForCounts) {
+                    continue;
+                }
+
+                const rawDiBawaSendiriOpt = (filterOpt.isDiBawaSendiri !== undefined && filterOpt.isDiBawaSendiri !== null) ? filterOpt.isDiBawaSendiri.toString().trim() : '';
+                const isDiBawaSendiriFilter = (
+                    statusPengiriman === 'Di Bawa Sendiri' || 
+                    statusPengiriman === 'Selesai Di Bawa Sendiri' ||
+                    isTitipBarangFilter === 'di_bawa_sendiri' || 
+                    isTitipBarangFilter.indexOf('bawa_sendiri') !== -1 ||
+                    rawDiBawaSendiriOpt !== '' ||
+                    filterOpt.isDiBawaSendiri === true ||
+                    filterOpt.isDiBawaSendiri === 'Ya'
+                );
+
+                if (!isDiBawaSendiriFilter && isDiBawaSendiriItem) {
+                    continue;
+                }
+
+                if (isDiBawaSendiriFilter) {
+                    if (!isDiBawaSendiriItem) continue;
+                    const subChoice = rawDiBawaSendiriOpt || isTitipBarangFilter;
+                    if (subChoice === 'bawa_sendiri_aktif' || subChoice === 'di_bawa_sendiri_aktif') {
+                        if (isSelesaiItem || orderObj.status_pengiriman === 'Selesai Di Bawa Sendiri') continue;
+                    } else if (subChoice === 'bawa_sendiri_titip' || subChoice === 'di_titip_nanti') {
+                        if (isSelesaiItem || orderObj.status_pengiriman === 'Selesai Di Bawa Sendiri') continue;
+                    } else if (subChoice === 'bawa_sendiri_selesai' || subChoice === 'selesai_bawa_sendiri') {
+                        if (!isSelesaiItem && orderObj.status_pengiriman !== 'Selesai Di Bawa Sendiri') continue;
+                    } else {
+                        if (isSelesaiItem || orderObj.status_pengiriman === 'Selesai Di Bawa Sendiri') continue;
+                    }
+                    filtered.push(orderObj);
+                    continue;
+                }
+
+                if (!statusPengiriman && !isUrgentFilter && !isTitipBarangFilter && !statusPembayaran && isSelesaiItem) continue;
+
+                const isFilterSemua = (!statusPengiriman && !isUrgentFilter && !isTitipBarangFilter && !statusPembayaran);
+
+                if (isTitipBarangFilter === 'Ya' || isTitipBarangFilter === 'all' || isTitipBarangFilter === 'titip_all' || isTitipBarangFilter === 'titip_sisa_all') {
+                    if (!isTitipSisaItem || isSelesaiItem || isDalamPengantaran) continue;
+                } else if (isTitipBarangFilter === 'titip_only' || isTitipBarangFilter === 'titip') {
+                    if (!isTitipOnly || isSelesaiItem || isDalamPengantaran) continue;
+                } else if (isTitipBarangFilter === 'sisa_only' || isTitipBarangFilter === 'sisa') {
+                    if (!isSisaWaitingNextTrip || isSelesaiItem || isDalamPengantaran) continue;
+                } else if (isTitipBarangFilter === 'fulljob') {
+                    if (isDiBawaSendiriItem || !isFullJobItem || isTitipSisaItem || isSelesaiItem || isDalamPengantaran) continue;
+                } else if (!isFilterSemua) {
+                    if (statusPengiriman && isTitipSisaItem && !isSelesaiItem) continue;
+
+                    if (statusPengiriman === 'Dalam Pengantaran') {
+                        if (!isDalamPengantaran) continue;
+                    } else if (statusPengiriman === 'Pesanan Masuk / Dimuat' || statusPengiriman === 'Pesanan Masuk') {
+                        if (isFullJobItem) continue;
+                        if (orderObj.status_pengiriman !== 'Pesanan Masuk / Dimuat' && orderObj.status_pengiriman !== 'Pesanan Masuk') continue;
+                    } else if (statusPengiriman) {
+                        if (statusPengiriman === 'Selesai') {
+                            if (!isSelesaiItem) continue;
+                        } else if (orderObj.status_pengiriman !== statusPengiriman) {
+                            continue;
+                        }
+                    }
+                }
+
+                if (statusPembayaran) {
+                    if (isDiBawaSendiriItem) continue;
+                    const sPay = (orderObj.status_pembayaran || '').toString().toLowerCase();
+                    const payStatusLower = sPay.trim();
+                    const isLunas = payStatusLower === 'lunas' || (payStatusLower.includes('lunas') && !payStatusLower.includes('belum'));
+                    const isTransfer = payStatusLower.includes('transfer');
+                    const hasUnpaid = !isLunas && !isTransfer;
+                    const hasBelumBayar = hasUnpaid || (orderObj.catatan_nota && orderObj.catatan_nota.includes('[TAMBAHAN_BELUM_BAYAR:')) || (orderObj.nominal_tambahan_belum_bayar > 0);
+                    if (!hasBelumBayar) continue;
+
+                    if (statusPembayaran === 'belum_bayar_all' || statusPembayaran === 'belum_lunas_all' || statusPembayaran === 'Belum Lunas' || statusPembayaran === 'all_unpaid' || statusPembayaran === 'all') {
+                        // loloskan
+                    } else if (statusPembayaran === 'Pembayaran Sebagian' || statusPembayaran === 'sebagian') {
+                        if (!sPay.includes('sebagian') && !sPay.includes('dp')) continue;
+                    } else if (statusPembayaran === 'Bayar di Lokasi' || statusPembayaran === 'COD') {
+                        if (!sPay.includes('cod') && !sPay.includes('lokasi')) continue;
+                    } else if (statusPembayaran === 'Belum Bayar') {
+                        if (sPay.includes('cod') || sPay.includes('lokasi') || sPay.includes('sebagian') || sPay.includes('dp')) continue;
+                    } else if (orderObj.status_pembayaran !== statusPembayaran) {
+                        continue;
+                    }
+                }
+
+                if (isUrgentFilter === 'Ya') {
+                    if ((orderObj.is_urgent !== 'Ya' && orderObj.is_urgent !== true) || isSelesaiItem) continue;
+                }
+
+                filtered.push(orderObj);
+            }
+
+            // Sorting: Urgent first, then ID Order DESC
+            filtered.sort((a, b) => {
+                const isSelesaiA = a.status_pengiriman && (a.status_pengiriman.toLowerCase().includes('selesai') || a.status_pengiriman === 'Terkirim');
+                const isSelesaiB = b.status_pengiriman && (b.status_pengiriman.toLowerCase().includes('selesai') || b.status_pengiriman === 'Terkirim');
+
+                const aUrgent = ((a.is_urgent === 'Ya' || a.is_urgent === true) && !isSelesaiA) ? 1 : 0;
+                const bUrgent = ((b.is_urgent === 'Ya' || b.is_urgent === true) && !isSelesaiB) ? 1 : 0;
+
+                if (aUrgent !== bUrgent) {
+                    return bUrgent - aUrgent;
+                }
+                return (b.id_order || '').localeCompare(a.id_order || '');
+            });
+
+            const totalRecords = filtered.length;
+            const totalPages = Math.ceil(totalRecords / limit) || 1;
+            const startIndex = (page - 1) * limit;
+            const paginatedData = filtered.slice(startIndex, startIndex + limit);
 
             const counts = {
-                all: mappedOrders.length,
-                masuk: mappedOrders.filter(o => o.status_pengiriman === 'Pesanan Masuk / Dimuat').length,
-                muat: mappedOrders.filter(o => o.status_pengiriman === 'Sedang Dimuat').length,
-                jalan: mappedOrders.filter(o => o.status_pengiriman === 'Dalam Pengantaran').length,
-                selesai: mappedOrders.filter(o => o.status_pengiriman === 'Selesai Terkirim' || o.status_pengiriman === 'Selesai').length,
-                urgent: mappedOrders.filter(o => o.is_urgent === 'Ya' || o.is_urgent === true).length,
-                belumBayar: mappedOrders.filter(o => o.status_pembayaran === 'Belum Bayar').length
+                all: cntAll,
+                masuk: cntMasuk,
+                muat: cntMuat,
+                jalan: cntJalan,
+                selesai: cntSelesai,
+                fulljob: cntFulljob,
+                urgent: cntUrgent,
+                belumBayar: cntBelumBayar,
+                titip: cntTitip,
+                diBawaSendiri: cntDiBawaSendiri
             };
 
             return {
                 success: true,
-                data: mappedOrders,
-                orders: mappedOrders,
-                total: count || mappedOrders.length,
-                page: page,
-                totalPages: Math.ceil((count || mappedOrders.length) / limit) || 1,
-                counts: counts
+                data: paginatedData,
+                orders: paginatedData,
+                counts: counts,
+                pagination: {
+                    currentPage: page,
+                    totalPages: totalPages,
+                    totalRecords: totalRecords
+                }
             };
         },
 
@@ -593,17 +1061,25 @@
         // --- MASTER DATA PELANGGAN ---
         getCustomers: async function() {
             const sb = getClient();
-            if (!sb) return [];
+            if (!sb) return { success: false, data: [], customers: [] };
             const { data } = await sb.from('customers').select('*').order('name');
-            return (data || []).map(c => ({
+            const mapped = (data || []).map(c => ({
                 id_pelanggan: c.id,
                 nama_pelanggan: c.name,
                 no_hp: c.phone,
                 alamat_lengkap: c.address,
                 link_gmaps: c.maps_url,
                 total_order: c.total_orders,
-                ongkir_standar: c.standard_shipping_fee
+                ongkir_standar: c.standard_shipping_fee,
+                ongkir: c.standard_shipping_fee
             }));
+            mapped.success = true;
+            mapped.data = mapped;
+            return {
+                success: true,
+                data: mapped,
+                customers: mapped
+            };
         },
 
         addNewCustomer: async function(custPayload) {
