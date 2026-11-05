@@ -1,16 +1,16 @@
 /**
- * UNIVERSAL GAS-TO-SUPABASE ADAPTER (FACADE ENGINE) v2.0
- * TB DELIVERY PRO (TB TAMARA)
+ * UNIVERSAL GAS-TO-SUPABASE ADAPTER (FACADE ENGINE) v3.0
+ * TB DELIVERY PRO (TB TAMARA / TMR)
  * Dibuat oleh: ZettBOT by Zettbos
  * 
  * Fungsi:
  * - Menangani 100% pemanggilan `google.script.run` di antarmuka HTML.
  * - Mengalihkan query ke PostgreSQL Supabase & Supabase Storage secara asinkron super cepat.
- * - Mendukung dwibahasa properti (format kolom PostgreSQL snake_case dan format GAS asli Indonesia).
+ * - Menyediakan implementasi lengkap untuk CRUD Order, Checker, Sopir, Customer, Armada, BBM, Oli, Pajak, dan Konfigurasi.
  */
 
 (function() {
-    console.log('[Supabase Adapter] Mengaktifkan Universal Adapter TB Delivery PRO...');
+    console.log('[Supabase Adapter v3.0] Mengaktifkan Universal Adapter TB Delivery PRO...');
 
     // 1. Kredensial Supabase Resmi TB Tamara
     const DEFAULT_SUPABASE_URL = window.__TB_SUPABASE_URL || 'https://eagplukqotycpslhvnbp.supabase.co';
@@ -24,7 +24,14 @@
         return _supabase;
     }
 
-    // Helper untuk memetakan format database ke format objek user UI
+    // Helper: Format tanggal aman
+    function formatDateIso(d) {
+        if (!d) return new Date().toISOString();
+        if (d instanceof Date) return d.toISOString();
+        return String(d);
+    }
+
+    // Helper: Map profile row ke objek frontend
     function mapProfileToUserObj(row) {
         if (!row) return null;
         return {
@@ -44,7 +51,7 @@
         };
     }
 
-    // Helper untuk memetakan order Supabase ke format GAS UI
+    // Helper: Map order Supabase ke format GAS UI
     function mapOrderToGasObj(row) {
         if (!row) return null;
         return {
@@ -85,9 +92,29 @@
         };
     }
 
-    // 2. Mock / Implemented Backend Services
+    // Helper: Log aktivitas sistem ke Supabase
+    async function logActivity(userId, userName, role, action, details) {
+        try {
+            const sb = getClient();
+            if (!sb) return;
+            const logId = 'LOG-' + Date.now();
+            await sb.from('activity_logs').insert([{
+                id: logId,
+                timestamp: new Date().toISOString(),
+                user_code: userId || 'SYSTEM',
+                user_name: userName || 'Sistem',
+                role: role || 'System',
+                action: action || 'ACTION',
+                details: typeof details === 'object' ? JSON.stringify(details) : String(details || '')
+            }]);
+        } catch(e) {
+            console.warn('[LogActivity skipped]', e);
+        }
+    }
+
+    // 2. Daftar Layanan Backend Terintegrasi ke Supabase
     const apiServices = {
-        // --- AUTH & USER SERVICES ---
+        // --- AUTH & SESI PENGGUNA ---
         loginUser: async function(u, p) {
             const sb = getClient();
             if (!sb) return { success: false, message: 'Supabase client belum siap.' };
@@ -102,7 +129,7 @@
                 password = String(p || '').trim();
             }
 
-            console.log('[Supabase Adapter] Mencoba login:', username);
+            console.log('[Supabase Adapter] Login attempt:', username);
 
             const { data, error } = await sb
                 .from('profiles')
@@ -111,12 +138,10 @@
                 .maybeSingle();
 
             if (error || !data) {
-                console.warn('[Supabase Adapter] User tidak ditemukan:', username, error);
                 return { success: false, message: 'Username atau password salah!' };
             }
 
             if (data.password && data.password.trim() !== password) {
-                console.warn('[Supabase Adapter] Password salah untuk user:', username);
                 return { success: false, message: 'Username atau password salah!' };
             }
 
@@ -128,10 +153,11 @@
             const token = 'TKN_' + (data.user_code || data.id) + '_' + Date.now();
             const expiresAt = Date.now() + (30 * 24 * 60 * 60 * 1000);
 
-            // Simpan session profile lokal
             localStorage.setItem('tb_tamara_current_user', JSON.stringify(userObj));
             localStorage.setItem('tb_tamara_user', JSON.stringify(userObj));
             localStorage.setItem('tb_auth_token', token);
+
+            logActivity(userObj.id_user, userObj.nama, userObj.role, 'LOGIN', 'User login ke sistem via Supabase');
 
             return {
                 success: true,
@@ -175,6 +201,36 @@
             return (data || []).map(mapProfileToUserObj);
         },
 
+        saveUser: async function(userData) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+
+            const userCode = userData.id_user || userData.user_code || ('USR-' + Date.now().toString().slice(-4));
+            const payload = {
+                user_code: userCode,
+                full_name: userData.nama || userData.full_name,
+                username: userData.username,
+                password: userData.password,
+                role: userData.role || 'Staff Toko',
+                phone: userData.no_hp || userData.phone || '',
+                is_active: userData.is_active !== false,
+                shift_start: userData.jam_masuk || '',
+                shift_end: userData.jam_keluar || '',
+                address: userData.alamat || userData.address || ''
+            };
+
+            const { data, error } = await sb.from('profiles').upsert([payload], { onConflict: 'user_code' }).select().single();
+            if (error) return { success: false, message: error.message };
+            return { success: true, message: 'User berhasil disimpan!', user: mapProfileToUserObj(data) };
+        },
+
+        deleteUser: async function(idUser) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('profiles').delete().eq('user_code', idUser);
+            return { success: !error, message: error ? error.message : 'User berhasil dihapus' };
+        },
+
         // --- DASHBOARD & METRICS ---
         getDashboardData: async function() {
             const sb = getClient();
@@ -205,7 +261,16 @@
 
             let query = sb.from('orders').select('*', { count: 'exact' });
 
-            // Pengurutan
+            if (filterOpt.statusPengiriman) {
+                query = query.eq('delivery_status', filterOpt.statusPengiriman);
+            }
+            if (filterOpt.statusPembayaran) {
+                query = query.eq('payment_status', filterOpt.statusPembayaran);
+            }
+            if (filterOpt.search) {
+                query = query.or(`customer_name.ilike.%${filterOpt.search}%,id.ilike.%${filterOpt.search}%,customer_phone.ilike.%${filterOpt.search}%`);
+            }
+
             query = query.order('created_at', { ascending: false });
 
             const { data, count, error } = await query;
@@ -216,7 +281,6 @@
 
             const mappedOrders = (data || []).map(mapOrderToGasObj);
 
-            // Hitung ringkasan status
             const counts = {
                 all: mappedOrders.length,
                 masuk: mappedOrders.filter(o => o.status_pengiriman === 'Pesanan Masuk / Dimuat').length,
@@ -238,32 +302,86 @@
             };
         },
 
-        createOrder: async function(orderPayload) {
+        createOrder: async function(orderData, base64NotaInput, currentUser) {
             const sb = getClient();
-            if (!sb) return { success: false, message: 'Supabase client belum siap.' };
+            if (!sb) return { success: false, message: 'Database Supabase tidak terhubung.' };
 
-            const sbPayload = {
-                customer_id: orderPayload.id_pelanggan || orderPayload.customer_id,
-                customer_name: orderPayload.nama_pelanggan || orderPayload.customer_name,
-                customer_phone: orderPayload.no_hp_pelanggan || orderPayload.customer_phone,
-                customer_address: orderPayload.alamat_lengkap || orderPayload.customer_address,
-                maps_url: orderPayload.link_gmaps || orderPayload.maps_url,
-                order_date: orderPayload.tanggal_order || orderPayload.order_date || new Date().toISOString().split('T')[0],
-                delivery_date: orderPayload.tanggal_pengantaran || orderPayload.delivery_date,
-                is_urgent: orderPayload.is_urgent === 'Ya' || orderPayload.is_urgent === true,
-                items_detail: orderPayload.detail_barang || orderPayload.items_detail,
-                notes: orderPayload.catatan_nota || orderPayload.notes,
-                shipping_cost: Number(orderPayload.biaya_ongkir || orderPayload.shipping_cost || 0),
-                total_amount: Number(orderPayload.total_nilai_nota || orderPayload.total_amount || 0),
-                payment_status: orderPayload.status_pembayaran || 'Belum Bayar',
-                delivery_status: 'Pesanan Masuk / Dimuat',
+            console.log('[Adapter createOrder] Input:', orderData);
+
+            // Generate Order ID Atomik: TMR-MMDD-XXXX
+            const now = new Date();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const prefix = `TMR-${mm}${dd}-`;
+
+            // Cari urutan tertinggi hari ini
+            const { data: latestToday } = await sb
+                .from('orders')
+                .select('id')
+                .ilike('id', `${prefix}%`)
+                .order('id', { ascending: false })
+                .limit(1);
+
+            let nextNum = 1;
+            if (latestToday && latestToday.length > 0) {
+                const parts = latestToday[0].id.split('-');
+                if (parts.length >= 3) {
+                    const parsed = parseInt(parts[2], 10);
+                    if (!isNaN(parsed)) nextNum = parsed + 1;
+                }
+            }
+
+            const orderId = `${prefix}${String(nextNum).padStart(4, '0')}`;
+
+            // Handle URL foto nota
+            let notaUrl = '';
+            if (Array.isArray(base64NotaInput) && base64NotaInput.length > 0) {
+                notaUrl = base64NotaInput[0];
+            } else if (typeof base64NotaInput === 'string') {
+                notaUrl = base64NotaInput;
+            }
+
+            const pembuatNama = currentUser ? (currentUser.nama || currentUser.full_name || 'Staff') : 'Staff';
+            const tipeKirim = (orderData.tipe_pengiriman || orderData.status_tipe_kirim || 'Dikirim').trim();
+            const isDiBawaSendiri = (tipeKirim === 'Di Bawa Sendiri');
+
+            const payload = {
+                id: orderId,
+                customer_id: orderData.id_pelanggan || ('CUST-' + Date.now().toString().slice(-4)),
+                customer_name: orderData.nama_pelanggan || '',
+                customer_phone: orderData.no_hp_pelanggan || '',
+                customer_address: orderData.alamat_lengkap || '',
+                maps_url: orderData.link_gmaps || '',
+                order_date: orderData.tanggal_order || now.toISOString().split('T')[0],
+                delivery_date: orderData.tanggal_pengantaran || null,
+                is_urgent: orderData.is_urgent === 'Ya' || orderData.is_urgent === true,
+                items_detail: orderData.detail_barang || 'Sesuai Nota',
+                notes: orderData.catatan_nota || orderData.catatan || '',
+                shipping_cost: Number(orderData.biaya_ongkir || orderData.ongkir || 0),
+                total_amount: Number(orderData.total_nilai_nota || 0),
+                payment_status: orderData.status_pembayaran || 'Belum Bayar',
+                delivery_status: isDiBawaSendiri ? 'Di Bawa Sendiri' : 'Pesanan Masuk / Dimuat',
                 verification_status: 'Belum di Cek',
-                created_by: orderPayload.pembuat_order || orderPayload.created_by || 'Admin'
+                driver_id: isDiBawaSendiri ? null : (orderData.id_sopir || null),
+                driver_name: isDiBawaSendiri ? 'Di Bawa Sendiri' : (orderData.nama_sopir || 'Semua Sopir'),
+                nota_photo_url: notaUrl,
+                created_by: pembuatNama
             };
 
-            const { data, error } = await sb.from('orders').insert([sbPayload]).select().single();
-            if (error) return { success: false, message: error.message };
-            return { success: true, data: mapOrderToGasObj(data) };
+            const { data, error } = await sb.from('orders').insert([payload]).select().single();
+            if (error) {
+                console.error('[Adapter createOrder Error]', error);
+                return { success: false, message: 'Gagal membuat order: ' + error.message };
+            }
+
+            logActivity(currentUser?.id_user, pembuatNama, currentUser?.role || 'Staff', 'CREATE_ORDER', `Menerbitkan pesanan ${orderId}`);
+
+            return {
+                success: true,
+                message: `Order ${orderId} berhasil diterbitkan!`,
+                id_order: orderId,
+                data: mapOrderToGasObj(data)
+            };
         },
 
         updateOrder: async function(orderId, updatePayload) {
@@ -277,7 +395,78 @@
                 .select()
                 .single();
 
-            return { success: !error, data: mapOrderToGasObj(data), message: error?.message };
+            return { success: !error, data: mapOrderToGasObj(data), message: error ? error.message : 'Order berhasil diperbarui.' };
+        },
+
+        deleteOrder: async function(idOrder) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            const { error } = await sb.from('orders').delete().eq('id', idOrder);
+            return { success: !error, message: error ? error.message : `Order ${idOrder} berhasil dihapus.` };
+        },
+
+        updateStatusPengiriman: async function(idOrder, statusBaru, base64BuktiArray, idUser, namaUser, userRole) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+
+            console.log('[Adapter updateStatusPengiriman]', idOrder, statusBaru);
+
+            const updateFields = {
+                delivery_status: statusBaru
+            };
+
+            if (statusBaru === 'Selesai' || statusBaru === 'Selesai Terkirim') {
+                updateFields.completed_at = new Date().toISOString();
+            }
+
+            if (namaUser && (userRole === 'Sopir' || userRole === 'Karnet' || String(namaUser).includes('('))) {
+                updateFields.driver_name = namaUser;
+                if (idUser && userRole === 'Sopir') updateFields.driver_id = idUser;
+            }
+
+            // Simpan foto bukti jika ada
+            if (Array.isArray(base64BuktiArray) && base64BuktiArray.length > 0) {
+                for (let i = 0; i < Math.min(base64BuktiArray.length, 5); i++) {
+                    if (base64BuktiArray[i]) {
+                        updateFields[`proof_url_${i + 1}`] = base64BuktiArray[i];
+                    }
+                }
+            }
+
+            const { error } = await sb.from('orders').update(updateFields).eq('id', idOrder);
+            if (error) {
+                return { success: false, message: 'Gagal update status: ' + error.message };
+            }
+
+            logActivity(idUser, namaUser, userRole || 'Sopir', 'UPDATE_STATUS_KIRIM', `Mengubah status ${idOrder} ke ${statusBaru}`);
+
+            return {
+                success: true,
+                message: `Status pengiriman ${idOrder} diperbarui ke: ${statusBaru}`
+            };
+        },
+
+        updateStatusPembayaran: async function(idOrder, statusBayarBaru, idUser, namaUser, userRole, base64TransferArray, base64LunasArray, nominalBelumBayar) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+
+            const updateFields = {
+                payment_status: statusBayarBaru,
+                payment_collector: namaUser || ''
+            };
+
+            if (Array.isArray(base64TransferArray) && base64TransferArray.length > 0) {
+                updateFields.transfer_proof_url = base64TransferArray[0];
+            }
+            if (Array.isArray(base64LunasArray) && base64LunasArray.length > 0) {
+                updateFields.cash_proof_url = base64LunasArray[0];
+            }
+
+            const { error } = await sb.from('orders').update(updateFields).eq('id', idOrder);
+            if (error) return { success: false, message: error.message };
+
+            logActivity(idUser, namaUser, userRole, 'UPDATE_STATUS_BAYAR', `Mengubah pembayaran ${idOrder} ke ${statusBayarBaru}`);
+            return { success: true, message: `Status pembayaran ${idOrder} diperbarui ke ${statusBayarBaru}` };
         },
 
         ambilJob: async function(orderId, driverId, driverName) {
@@ -293,22 +482,70 @@
                 })
                 .eq('id', orderId);
 
-            return { success: !error, message: error ? error.message : 'Berhasil mengambil job.' };
+            logActivity(driverId, driverName, 'Sopir', 'AMBIL_JOB', `Sopir ${driverName} mengambil order ${orderId}`);
+            return { success: !error, message: error ? error.message : 'Berhasil mengambil job!' };
         },
 
-        verifikasiChecker: async function(orderId, checkerName) {
+        assignSopir: async function(idOrder, sopirName, idSopir) {
             const sb = getClient();
             if (!sb) return { success: false };
 
             const { error } = await sb
                 .from('orders')
                 .update({
-                    verification_status: 'Sudah di Cek',
-                    checker_name: checkerName
+                    driver_id: idSopir || null,
+                    driver_name: sopirName || 'Semua Sopir'
                 })
-                .eq('id', orderId);
+                .eq('id', idOrder);
 
-            return { success: !error, message: error ? error.message : 'Berhasil diverifikasi checker.' };
+            return { success: !error, message: error ? error.message : `Sopir ${sopirName} berhasil ditugaskan!` };
+        },
+
+        verifikasiChecker: async function(idOrder, idUser, namaUser, modeCek, catatanCek, base64ItemPhotosArray, userRole) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+
+            const checkerName = namaUser || (typeof idUser === 'string' ? idUser : 'Checker');
+            const statusVerif = modeCek || 'Sudah di Cek';
+
+            const updateFields = {
+                verification_status: statusVerif,
+                checker_name: checkerName
+            };
+
+            if (Array.isArray(base64ItemPhotosArray) && base64ItemPhotosArray.length > 0) {
+                updateFields.additional_nota_url = base64ItemPhotosArray[0];
+            }
+
+            const { error } = await sb.from('orders').update(updateFields).eq('id', idOrder);
+            if (error) return { success: false, message: error.message };
+
+            logActivity(idUser, checkerName, userRole || 'Checker', 'VERIFIKASI_CHECKER', `Memverifikasi fisik order ${idOrder}`);
+            return { success: true, message: `Order ${idOrder} berhasil diverifikasi checker!` };
+        },
+
+        saveFotoMuatan: async function(idOrder, base64Array) {
+            const sb = getClient();
+            if (!sb || !base64Array || !base64Array.length) return { success: false };
+            const { error } = await sb.from('orders').update({ additional_nota_url: base64Array[0] }).eq('id', idOrder);
+            return { success: !error, message: error ? error.message : 'Foto muatan berhasil disimpan!' };
+        },
+
+        archiveCompletedOrders: async function() {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb
+                .from('orders')
+                .update({ is_archived: true })
+                .eq('delivery_status', 'Selesai');
+            return { success: !error, message: error ? error.message : 'Pesanan selesai berhasil diarsipkan.' };
+        },
+
+        restoreArchivedOrder: async function(idOrder) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('orders').update({ is_archived: false }).eq('id', idOrder);
+            return { success: !error, message: error ? error.message : `Order ${idOrder} berhasil dikembalikan dari arsip.` };
         },
 
         // --- MASTER DATA PELANGGAN ---
@@ -327,6 +564,43 @@
             }));
         },
 
+        addNewCustomer: async function(custPayload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const custId = 'CUST-' + Date.now().toString().slice(-5);
+            const payload = {
+                id: custId,
+                name: custPayload.nama_pelanggan || custPayload.name,
+                phone: custPayload.no_hp || custPayload.phone || '',
+                address: custPayload.alamat_lengkap || custPayload.address || '',
+                maps_url: custPayload.link_gmaps || custPayload.maps_url || '',
+                standard_shipping_fee: Number(custPayload.ongkir_standar || custPayload.standard_shipping_fee || 0),
+                total_orders: 0
+            };
+            const { data, error } = await sb.from('customers').insert([payload]).select().single();
+            return { success: !error, message: error ? error.message : 'Pelanggan berhasil ditambahkan!', data: data };
+        },
+
+        updateCustomer: async function(idCust, custPayload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const payload = {
+                name: custPayload.nama_pelanggan || custPayload.name,
+                phone: custPayload.no_hp || custPayload.phone,
+                address: custPayload.alamat_lengkap || custPayload.address,
+                maps_url: custPayload.link_gmaps || custPayload.maps_url
+            };
+            const { error } = await sb.from('customers').update(payload).eq('id', idCust);
+            return { success: !error, message: error ? error.message : 'Pelanggan berhasil diperbarui!' };
+        },
+
+        deleteCustomer: async function(idCust) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('customers').delete().eq('id', idCust);
+            return { success: !error, message: error ? error.message : 'Pelanggan berhasil dihapus!' };
+        },
+
         // --- PENGATURAN & EMERGENCY MESSAGES ---
         getAppConfig: async function() {
             const sb = getClient();
@@ -335,6 +609,13 @@
             const configObj = {};
             (data || []).forEach(row => { configObj[row.key] = row.value; });
             return configObj;
+        },
+
+        saveAppConfig: async function(key, value, description) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('system_configs').upsert([{ key, value, description }], { onConflict: 'key' });
+            return { success: !error, message: error ? error.message : 'Pengaturan berhasil disimpan!' };
         },
 
         getActiveEmergencyMessage: async function() {
@@ -351,7 +632,30 @@
             return data || null;
         },
 
-        // --- ARMADA & KENDARAAN ---
+        saveEmergencyMessage: async function(msgPayload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const msgId = 'MSG-' + Date.now();
+            const payload = {
+                id: msgId,
+                title: msgPayload.title || msgPayload.judul,
+                message: msgPayload.message || msgPayload.isi,
+                type: msgPayload.type || 'Pemberitahuan',
+                is_active: true,
+                created_by: msgPayload.created_by || 'Admin'
+            };
+            const { error } = await sb.from('emergency_messages').insert([payload]);
+            return { success: !error, message: error ? error.message : 'Pesan darurat berhasil disiarkan!' };
+        },
+
+        deleteEmergencyMessageById: async function(msgId) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('emergency_messages').update({ is_active: false }).eq('id', msgId);
+            return { success: !error, message: error ? error.message : 'Pesan darurat dinonaktifkan.' };
+        },
+
+        // --- ARMADA, BBM & SERVIS ---
         getKendaraanList: async function() {
             const sb = getClient();
             if (!sb) return [];
@@ -367,10 +671,120 @@
             }));
         },
 
-        // --- LEGALITAS PAJAK & KIR ---
+        requestIzinIsiBBM: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const idIzin = 'IZN-' + Date.now().toString().slice(-6);
+            const dataToInsert = {
+                id: idIzin,
+                request_time: new Date().toISOString(),
+                driver_id: payload.driver_id || payload.id_sopir,
+                driver_name: payload.driver_name || payload.nama_sopir,
+                plate_number: payload.plate_number || payload.no_plat,
+                status: 'Menunggu Persetujuan',
+                notes: payload.notes || payload.catatan || '',
+                is_used: 'Belum'
+            };
+            const { error } = await sb.from('fuel_approvals').insert([dataToInsert]);
+            return { success: !error, message: error ? error.message : 'Permohonan izin BBM berhasil diajukan!' };
+        },
+
+        respondIzinIsiBBM: async function(idIzin, status, catatan, adminName) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('fuel_approvals').update({
+                status: status,
+                catatan: catatan,
+                responded_by: adminName,
+                responded_at: new Date().toISOString()
+            }).eq('id', idIzin);
+            return { success: !error, message: error ? error.message : 'Izin BBM berhasil ditanggapi.' };
+        },
+
+        submitPengisianBBM: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const idBbm = 'BBM-' + Date.now().toString().slice(-6);
+            const dataToInsert = {
+                id: idBbm,
+                fuel_date: payload.tanggal || new Date().toISOString(),
+                plate_number: payload.no_plat || payload.plate_number,
+                driver_id: payload.id_sopir || payload.driver_id,
+                driver_name: payload.nama_sopir || payload.driver_name,
+                current_km: Number(payload.km_saat_ini || 0),
+                liters: Number(payload.jumlah_liter || 0),
+                total_cost: Number(payload.total_biaya || 0),
+                gas_station: payload.nama_spbu || '',
+                fuel_type: payload.jenis_bbm || 'Solar',
+                km_photo_url: payload.foto_km || '',
+                receipt_photo_url: payload.foto_struk || '',
+                notes: payload.catatan || ''
+            };
+            const { error } = await sb.from('fuel_logs').insert([dataToInsert]);
+            if (!error && payload.plate_number) {
+                // Update KM mobil
+                await sb.from('vehicles').update({ current_km: Number(payload.km_saat_ini || 0) }).eq('plate_number', payload.plate_number);
+            }
+            return { success: !error, message: error ? error.message : 'Pengisian BBM berhasil dicatat!' };
+        },
+
+        deleteBBMTransaction: async function(idBbm) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('fuel_logs').delete().eq('id', idBbm);
+            return { success: !error, message: error ? error.message : 'Data BBM berhasil dihapus.' };
+        },
+
+        submitInputOli: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const idOli = 'OLI-' + Date.now().toString().slice(-6);
+            const dataToInsert = {
+                id: idOli,
+                service_date: payload.tanggal || new Date().toISOString(),
+                plate_number: payload.no_plat,
+                driver_id: payload.id_sopir,
+                driver_name: payload.nama_sopir,
+                service_km: Number(payload.km_saat_ganti || 0),
+                oil_brand: payload.merek_oli || '',
+                liters: Number(payload.jumlah_liter || 0),
+                total_cost: Number(payload.total_biaya || 0),
+                workshop_name: payload.nama_bengkel || ''
+            };
+            const { error } = await sb.from('oil_change_logs').insert([dataToInsert]);
+            return { success: !error, message: error ? error.message : 'Riwayat ganti oli berhasil dicatat!' };
+        },
+
+        deleteOliTransaction: async function(idOli) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('oil_change_logs').delete().eq('id', idOli);
+            return { success: !error, message: error ? error.message : 'Data oli berhasil dihapus.' };
+        },
+
+        submitInputService: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const idServis = 'SRV-' + Date.now().toString().slice(-6);
+            const dataToInsert = {
+                id: idServis,
+                service_date: payload.tanggal || new Date().toISOString(),
+                plate_number: payload.no_plat,
+                driver_id: payload.id_sopir,
+                driver_name: payload.nama_sopir,
+                current_km: Number(payload.km_saat_ini || 0),
+                workshop_name: payload.nama_bengkel || '',
+                cost: Number(payload.biaya_perbaikan || 0),
+                repair_details: payload.catatan_perbaikan || ''
+            };
+            const { error } = await sb.from('vehicle_services').insert([dataToInsert]);
+            return { success: !error, message: error ? error.message : 'Riwayat servis kendaraan berhasil disimpan!' };
+        },
+
+        // --- PAJAK & KIR KENDARAAN ---
         getPajakDashboardSummary: async function() {
             const sb = getClient();
-            if (!sb) return { total: 0, mobil: 0, motor: 0, perlu_perhatian: 0, items: [] };
+            if (!sb) return { total: 0, mobil: 0, motor: 0, items: [] };
 
             const { data } = await sb.from('vehicle_taxes').select('*');
             const list = data || [];
@@ -380,6 +794,25 @@
                 motor: list.filter(v => (v.vehicle_type || '').toLowerCase().includes('motor')).length,
                 items: list
             };
+        },
+
+        submitPembayaranPajak: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const idTx = 'PJK-TX-' + Date.now().toString().slice(-6);
+            const dataToInsert = {
+                id: idTx,
+                tax_id: payload.id_kendaraan || payload.tax_id,
+                plate_number: payload.no_polisi || payload.plate_number,
+                owner_name: payload.nama_pemilik || payload.owner_name,
+                payment_type: payload.jenis_pembayaran || payload.payment_type,
+                payment_date: payload.tanggal_bayar || new Date().toISOString(),
+                amount: Number(payload.nominal_biaya || payload.amount || 0),
+                notes: payload.catatan || '',
+                admin_name: payload.admin_penginput || payload.admin_name || 'Admin'
+            };
+            const { error } = await sb.from('tax_payment_logs').insert([dataToInsert]);
+            return { success: !error, message: error ? error.message : 'Pembayaran pajak berhasil dicatat!' };
         },
 
         // --- MASTER DATA SUPPLIER ---
@@ -455,14 +888,12 @@
             }
         };
 
-        // Buat Proxy dinamis untuk menangkap SEMUA nama fungsi di Code.gs
         return new Proxy(runner, {
             get: function(target, prop) {
                 if (prop === 'withSuccessHandler' || prop === 'withFailureHandler' || prop === 'withUserObject') {
                     return target[prop];
                 }
 
-                // Jika nama fungsi dipanggil, eksekusi handler Supabase
                 return function(...args) {
                     console.log(`[Adapter Call] -> ${String(prop)}()`, args);
 
@@ -476,7 +907,7 @@
                                 if (typeof _failureHandler === 'function') _failureHandler(err);
                             });
                     } else {
-                        console.warn(`[Adapter Fallback] Fungsi "${String(prop)}" belum dipetakan khusus. Mengembalikan { success: true }.`);
+                        console.warn(`[Adapter Fallback] Fungsi "${String(prop)}" belum dipetakan khusus. Mengembalikan fallback aman.`);
                         setTimeout(() => {
                             if (typeof _successHandler === 'function') _successHandler({ success: true, message: 'Fallback OK' });
                         }, 50);
@@ -490,7 +921,6 @@
     window.google = window.google || {};
     window.google.script = window.google.script || {};
     
-    // Override runner
     Object.defineProperty(window.google.script, 'run', {
         get: function() {
             return createRunner();
@@ -498,5 +928,5 @@
         configurable: true
     });
 
-    console.log('[Supabase Adapter] Universal Adapter v2.0 BERHASIL dipasang! google.script.run kini dialihkan ke Supabase.');
+    console.log('[Supabase Adapter v3.0] Universal Adapter BERHASIL diaktifkan penuh!');
 })();

@@ -34,6 +34,9 @@ console.log(`[Build] Berhasil menyatukan ${matchCount} modul HTML ke dalam 1 Sin
 indexHtml = indexHtml.replace(/<\?\=\s*typeof trackId[^\?]*\?>/g, "''");
 indexHtml = indexHtml.replace(/<\?\=\s*typeof webAppUrl[^\?]*\?>/g, "window.location.origin");
 
+// Ganti getCanonicalWebAppUrl agar mengembalikan domain live Vercel / window.location.origin
+indexHtml = indexHtml.replace(/function getCanonicalWebAppUrl\(\)\s*\{[\s\S]*?return\s+['"]https:\/\/script\.google\.com[^\n;]+;?\s*\}/, "function getCanonicalWebAppUrl() {\n            return window.location.origin;\n        }");
+
 // Update App Title & PWA Manifest
 indexHtml = indexHtml.replace(/<meta name="apple-mobile-web-app-title"[^>]*>/i, '<meta name="apple-mobile-web-app-title" content="TMR">\n    <meta name="application-name" content="TMR">\n    <meta name="theme-color" content="#060d17">\n    <link rel="manifest" href="./manifest.json">\n    <link rel="icon" type="image/svg+xml" href="./icon.svg">\n    <link rel="apple-touch-icon" href="./icon.svg">');
 indexHtml = indexHtml.replace(/<title id="appDocumentTitle"[^>]*>[^<]*<\/title>/i, '<title id="appDocumentTitle">TMR - Tamara Delivery PRO</title>');

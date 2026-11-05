@@ -9,10 +9,10 @@
     <meta name="apple-mobile-web-app-title" content="TMR">
     <meta name="application-name" content="TMR">
     <meta name="theme-color" content="#060d17">
-    <meta name="mobile-web-app-capable" content="yes">
     <link rel="manifest" href="./manifest.json">
     <link rel="icon" type="image/svg+xml" href="./icon.svg">
     <link rel="apple-touch-icon" href="./icon.svg">
+    <meta name="mobile-web-app-capable" content="yes">
     <title id="appDocumentTitle">TMR - Tamara Delivery PRO</title>
 
     <!-- Tailwind CSS CDN & FontAwesome Icons & Cropper.js & SheetJS -->
@@ -60776,16 +60776,7 @@
         var lastKnownGlobalMaxOrderId = window.lastKnownGlobalMaxOrderId || null;
 
         function getCanonicalWebAppUrl() {
-            if (serverWebAppUrl && typeof serverWebAppUrl === 'string' && serverWebAppUrl.includes('script.google.com/macros/s/')) {
-                return serverWebAppUrl;
-            }
-            try {
-                const href = window.location.href.split('?')[0].split('#')[0];
-                if (href && href.includes('script.google.com/macros/s/')) {
-                    return href;
-                }
-            } catch (e) { }
-            return 'https://script.google.com/macros/s/AKfycbz4e_nJJemXhPp_SekNg0Lc8Omx5zp5nYGkwD_-hGTOhazzaPSwfSqDxbE9b9c0D0J53g/exec';
+            return window.location.origin;
         }
 
         function loadGlobalDriversList(callback) {
