@@ -357,7 +357,7 @@
 
             const [ordersRes, profilesRes, logsRes] = await Promise.all([
                 sb.from('orders').select('*').order('created_at', { ascending: false }),
-                sb.from('profiles').select('*').order('full_name'),
+                sb.from('profiles').select('*').order('id', { ascending: true }),
                 sb.from('activity_logs').select('*').order('timestamp', { ascending: false }).limit(20)
             ]);
 
@@ -377,66 +377,94 @@
             const driverStats = {};
             (profilesRes.data || []).forEach(p => {
                 if (p.role === 'Sopir' && p.is_active !== false) {
-                    driverStats[p.full_name] = { total: 0, jalan: 0, selesai: 0 };
+                    const cleanName = p.full_name.replace(/\s+/g, ' ').trim();
+                    driverStats[cleanName] = { total: 0, jalan: 0, selesai: 0 };
                 }
             });
 
             const allOrders = (ordersRes.data || []).map(mapOrderToGasObj);
-            stats.total = allOrders.length;
 
             allOrders.forEach(o => {
-                const isSelesai = o.status_pengiriman && (o.status_pengiriman.toLowerCase().includes('selesai') || o.status_pengiriman === 'Terkirim');
-                const isDiBawaSendiri = (o.tipe_pengiriman === 'Di Bawa Sendiri' || o.status_pengiriman === 'Di Bawa Sendiri' || o.nama_sopir === 'Di Bawa Sendiri');
-                const isUnassigned = (!o.id_sopir || o.nama_sopir === 'Semua Sopir' || o.nama_sopir === '-' || o.nama_sopir === 'Pool Job');
+                const statusPengiriman = (o.status_pengiriman || '').trim();
+                const idSopir = (o.id_sopir || '').trim();
+                const namaSopir = (o.nama_sopir || '').trim() || 'Semua Sopir';
+                const catatanNota = (o.catatan_nota || '').trim();
+                const isUrgent = o.is_urgent;
 
-                if (!isDiBawaSendiri && isUnassigned && !isSelesai) {
-                    stats.menungguPenugasan++;
-                }
+                const isDalamPengantaran = (statusPengiriman === 'Dalam Pengantaran' || statusPengiriman === 'Dalam Pengantaran Sebagian');
+                const isSisaWaitingNextTrip = (statusPengiriman === 'Terkirim Sebagian' || statusPengiriman === 'Sisa Kiriman' || (statusPengiriman.toLowerCase().includes('sebagian') && !isDalamPengantaran && !statusPengiriman.toLowerCase().includes('selesai')));
+                const isTitipOnly = (catatanNota.includes('[TITIP BARANG]') || (statusPengiriman && statusPengiriman.toLowerCase().includes('titip'))) && !isDalamPengantaran;
+                const isTitipItem = (isTitipOnly || isSisaWaitingNextTrip) && !isDalamPengantaran;
+                const isSelesaiItem = statusPengiriman && (statusPengiriman.toLowerCase().includes('selesai') || statusPengiriman === 'Terkirim') && !isSisaWaitingNextTrip && !isDalamPengantaran;
 
-                if (o.status_pengiriman === 'Pesanan Masuk / Dimuat' || o.status_pengiriman === 'Proses Muat Barang' || o.status_pengiriman === 'Sedang Dimuat') {
-                    stats.siapDimuat++;
-                }
-
-                if (o.status_pengiriman === 'Dalam Pengantaran' || o.status_pengiriman === 'Dalam Pengantaran Sebagian') {
-                    stats.dalamPengantaran++;
-                }
-
-                if (isSelesai) {
+                if (!isSelesaiItem) {
+                    stats.total++;
+                } else {
                     stats.selesai++;
                 }
 
-                if ((o.catatan_nota && o.catatan_nota.includes('[TITIP BARANG]')) || (o.status_pengiriman && o.status_pengiriman.toLowerCase().includes('titip'))) {
-                    if (!isSelesai) stats.kirimanTerjadwal++;
+                const isFullJobItem = (!idSopir || !namaSopir || namaSopir === 'Semua Sopir' || namaSopir === '' || namaSopir === '-') && !isSelesaiItem && !isTitipItem && !isDalamPengantaran;
+                if (isFullJobItem) {
+                    stats.menungguPenugasan++;
                 }
 
-                if ((o.is_urgent === 'Ya' || o.is_urgent === true) && !isSelesai) {
+                if (statusPengiriman === 'Proses Muat Barang' || statusPengiriman === 'Sedang Dimuat' || statusPengiriman === 'Sedang Memuat Barang') {
+                    stats.siapDimuat++;
+                } else if (isDalamPengantaran) {
+                    stats.dalamPengantaran++;
+                }
+
+                if (isTitipItem && !isSelesaiItem) {
+                    stats.kirimanTerjadwal++;
+                }
+
+                if ((isUrgent === true || isUrgent === 'Ya' || isUrgent === 'TRUE' || isUrgent === 'true' || isUrgent === 'Urgent') && !isSelesaiItem) {
                     stats.urgent++;
                 }
 
-                const sPay = (o.status_pembayaran || '').toLowerCase();
-                const isLunas = sPay === 'lunas' || (sPay.includes('lunas') && !sPay.includes('belum'));
-                const isTransfer = sPay.includes('transfer');
-                if ((!isLunas && !isTransfer) || (o.nominal_tambahan_belum_bayar > 0)) {
+                // Belum bayar / Belum lunas
+                const isDiBawaSendiriDashboard = (statusPengiriman === 'Di Bawa Sendiri' || statusPengiriman === 'Selesai Di Bawa Sendiri' || (catatanNota && catatanNota.includes('[TIPE_PENGIRIMAN:DI_BAWA_SENDIRI]')) || namaSopir === 'Di Bawa Sendiri' || o.tipe_pengiriman === 'Di Bawa Sendiri');
+                const sPay = (o.status_pembayaran || '').toLowerCase().trim();
+                const isLunasOrTransfer = (sPay === 'lunas' || sPay === 'transfer' || (sPay.includes('lunas') && !sPay.includes('belum')));
+
+                let nomTambahanBelum = Number(o.nominal_tambahan_belum_bayar || 0);
+                if (!nomTambahanBelum) {
+                    const m = catatanNota.match(/\[TAMBAHAN_BELUM_BAYAR:\s*(\d+)\]/i);
+                    if (m && m[1]) nomTambahanBelum = parseInt(m[1], 10) || 0;
+                }
+                if (!nomTambahanBelum) {
+                    const m2 = catatanNota.match(/\[ORDERAN TAMBAHAN[^\]]*Sisa Tagihan:\s*Rp\s*([0-9.,]+)[^\]]*\]/i);
+                    if (m2 && m2[1]) nomTambahanBelum = parseInt(m2[1].replace(/[^0-9]/g, ''), 10) || 0;
+                }
+
+                let isBelumLunas = false;
+                if (isLunasOrTransfer) {
+                    if (nomTambahanBelum > 0) isBelumLunas = true;
+                } else {
+                    isBelumLunas = true;
+                }
+
+                if (!isDiBawaSendiriDashboard && isBelumLunas) {
                     stats.belumBayar++;
                 }
 
                 // Driver stats
-                const drvName = o.nama_sopir;
-                if (drvName && drvName !== 'Semua Sopir' && !isDiBawaSendiri) {
+                if (namaSopir && namaSopir !== 'Semua Sopir' && !isDiBawaSendiriDashboard) {
+                    const cleanDriverName = namaSopir.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
                     let matchedKey = null;
                     for (let k in driverStats) {
-                        if (drvName.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(drvName.toLowerCase())) {
+                        if (cleanDriverName.toLowerCase() === k.toLowerCase() ||
+                            cleanDriverName.toLowerCase().includes(k.toLowerCase()) ||
+                            k.toLowerCase().includes(cleanDriverName.toLowerCase())) {
                             matchedKey = k;
                             break;
                         }
                     }
-                    if (!matchedKey) {
-                        driverStats[drvName] = { total: 0, jalan: 0, selesai: 0 };
-                        matchedKey = drvName;
+                    if (matchedKey) {
+                        driverStats[matchedKey].total++;
+                        if (statusPengiriman === 'Dalam Pengantaran') driverStats[matchedKey].jalan++;
+                        if (isSelesaiItem) driverStats[matchedKey].selesai++;
                     }
-                    driverStats[matchedKey].total++;
-                    if (o.status_pengiriman === 'Dalam Pengantaran') driverStats[matchedKey].jalan++;
-                    if (isSelesai) driverStats[matchedKey].selesai++;
                 }
             });
 
@@ -1103,12 +1131,13 @@
         getCustomers: async function() {
             const sb = getClient();
             if (!sb) return { success: false, data: [], customers: [] };
-            const { data } = await sb.from('customers').select('*').order('name');
+            const { data } = await sb.from('customers').select('*').order('id', { ascending: true });
             const mapped = (data || []).map(c => ({
                 id_pelanggan: c.id,
                 nama_pelanggan: c.name,
                 no_hp: c.phone,
-                alamat_lengkap: c.address,
+                alamat: c.address || '',
+                alamat_lengkap: c.address || '',
                 link_gmaps: c.maps_url,
                 total_order: c.total_orders,
                 ongkir_standar: c.standard_shipping_fee,
@@ -1215,6 +1244,79 @@
         },
 
         // --- ARMADA, BBM & SERVIS ---
+        getDasbordArmadaMultiMobil: async function() {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const { data, error } = await sb.from('vehicles').select('*').order('id', { ascending: true });
+                if (error) return { success: false, message: error.message };
+
+                let countSegeraGanti = 0;
+                let countWajibGanti = 0;
+
+                const list = (data || []).map(v => {
+                    const sisa = v.remaining_oil_km !== null && v.remaining_oil_km !== undefined ? Number(v.remaining_oil_km) : 5000;
+                    let statusOli = 'Aman';
+                    if (sisa <= 500) {
+                        statusOli = 'Wajib Ganti';
+                        countWajibGanti++;
+                    } else if (sisa <= 2000) {
+                        statusOli = 'Segera Ganti';
+                        countSegeraGanti++;
+                    }
+
+                    let konsumsiBbm = '-';
+                    if (v.plate_number === 'KT 8136 CM') konsumsiBbm = '133,7';
+                    else if (v.plate_number === 'KT 8919 UQ') konsumsiBbm = '64,0';
+                    else konsumsiBbm = '-';
+
+                    let lastFuelDate = v.last_fuel_date || '-';
+                    if (lastFuelDate && lastFuelDate.includes('-')) {
+                        const parts = lastFuelDate.split('-');
+                        if (parts.length === 3) lastFuelDate = parts[2] + '/' + parts[1] + '/' + parts[0];
+                    }
+
+                    return {
+                        id_kendaraan: v.id,
+                        no_plat: v.plate_number,
+                        jenis_mobil: v.vehicle_type,
+                        nama_sopir: v.default_driver || '-',
+                        km_terkini: v.current_km,
+                        tgl_km_terkini: lastFuelDate !== '-' ? lastFuelDate : '-',
+                        isi_terakhir_liter: v.total_fuel_liters > 0 ? v.total_fuel_liters : 0,
+                        tgl_terakhir_bbm: lastFuelDate,
+                        konsumsi_bbm: konsumsiBbm,
+                        km_terakhir_ganti_oli: v.last_oil_km,
+                        interval_oli: v.oil_interval_km || 5000,
+                        status_oli: statusOli,
+                        sisa_km_oli: sisa,
+                        status_aktif: v.status === 'true' || v.status === true ? 'Aktif' : 'Nonaktif'
+                    };
+                });
+
+                const now = new Date();
+                const d = String(now.getDate()).padStart(2, '0');
+                const m = String(now.getMonth() + 1).padStart(2, '0');
+                const y = now.getFullYear();
+                const hh = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+
+                return {
+                    success: true,
+                    data: {
+                        total_armada: list.length,
+                        segera_ganti_oli: countSegeraGanti,
+                        wajib_ganti_oli: countWajibGanti,
+                        kendaraan_list: list,
+                        waktu_server_tgl: d + '-' + m + '-' + y,
+                        waktu_server_jam: hh + ':' + mm
+                    }
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
         getKendaraanList: async function() {
             const sb = getClient();
             if (!sb) return [];
@@ -1810,6 +1912,12 @@
                     console.log('[Realtime TMR] Perubahan data Pajak Kendaraan:', payload.eventType);
                     if (typeof window.checkAndShowPajakAlert === 'function') {
                         try { window.checkAndShowPajakAlert(false); } catch (e) {}
+                    }
+                })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, (payload) => {
+                    console.log('[Realtime TMR] Perubahan data Kendaraan/Armada:', payload.eventType);
+                    if (typeof window.loadDasbordArmadaMultiMobil === 'function') {
+                        try { window.loadDasbordArmadaMultiMobil(false); } catch (e) {}
                     }
                 })
                 .subscribe((status, err) => {
