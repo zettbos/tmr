@@ -11,6 +11,7 @@
 
 (function() {
     console.log('[Supabase Adapter v3.0] Mengaktifkan Universal Adapter TB Delivery PRO...');
+    window.__TB_SUPABASE_ADAPTER_ACTIVE = true;
 
     // 1. Kredensial Supabase Resmi TB Tamara
     const DEFAULT_SUPABASE_URL = window.__TB_SUPABASE_URL || 'https://eagplukqotycpslhvnbp.supabase.co';
@@ -29,6 +30,46 @@
         if (!d) return new Date().toISOString();
         if (d instanceof Date) return d.toISOString();
         return String(d);
+    }
+
+    // Helper: Format tanggal & jam Indonesia (dd/MM/yyyy HH:mm)
+    function formatIndonesianDateTime(val) {
+        if (!val) return '';
+        const str = String(val).trim();
+        if (/^\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}/.test(str)) return str;
+        const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+        if (m) {
+            return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+        }
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) {
+            const dd = String(d.getDate()).padStart(2, '0');
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const yyyy = d.getFullYear();
+            const hh = String(d.getHours()).padStart(2, '0');
+            const min = String(d.getMinutes()).padStart(2, '0');
+            return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+        }
+        return str;
+    }
+
+    // Helper: Format tanggal saja Indonesia (dd/MM/yyyy)
+    function formatIndonesianDateOnly(val) {
+        if (!val) return '';
+        const str = String(val).trim();
+        if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) return str.slice(0, 10);
+        const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) {
+            return `${m[3]}/${m[2]}/${m[1]}`;
+        }
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) {
+            const dd = String(d.getDate()).padStart(2, '0');
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const yyyy = d.getFullYear();
+            return `${dd}/${mm}/${yyyy}`;
+        }
+        return str;
     }
 
     // Helper: Map profile row ke objek frontend
@@ -117,8 +158,8 @@
         return {
             ...row,
             id_order: row.id,
-            tanggal_order: row.order_date || '',
-            tanggal_pengantaran: row.delivery_date || '',
+            tanggal_order: formatIndonesianDateTime(row.order_date),
+            tanggal_pengantaran: formatIndonesianDateOnly(row.delivery_date),
             is_urgent: (row.is_urgent === true || row.is_urgent === 'Ya' || row.is_urgent === 'true') ? 'Ya' : 'Tidak',
             id_pelanggan: row.customer_id || '',
             nama_pelanggan: row.customer_name || '',
@@ -1506,21 +1547,97 @@
         },
 
         // --- BARANG DATANG ---
-        getBarangDatangList: async function() {
+        getBarangDatangList: async function(currentUser) {
             const sb = getClient();
-            if (!sb) return [];
-            const { data } = await sb.from('incoming_goods').select('*').order('created_at', { ascending: false });
-            return (data || []).map(b => ({
-                id_barang_datang: b.id,
-                no_nota: b.invoice_no,
-                nama_suplayer: b.supplier_name,
-                tanggal_nota: b.invoice_date,
-                tanggal_terima: b.received_date,
-                catatan_barang: b.items_summary,
-                total_nilai_uang: b.total_amount,
-                status_jatuh_tempo: b.due_status,
-                sisa_hutang: b.remaining_debt
-            }));
+            if (!sb) return { success: true, data: [] };
+            try {
+                const { data, error } = await sb.from('incoming_goods').select('*').order('created_at', { ascending: false });
+                if (error || !data) return { success: true, data: [] };
+                const mapped = data.map(b => {
+                    const isPendingAdmin = (
+                        b.payment_method === 'Di isi admin nanti' || 
+                        b.payment_method === 'DIISI ADMIN NANTI' ||
+                        b.due_status === 'Diisi Admin Nanti' || 
+                        b.due_status === 'Menunggu Admin'
+                    );
+                    return {
+                        id: b.id,
+                        id_barang_datang: b.id,
+                        no_nota: b.invoice_no,
+                        nama_suplayer: b.supplier_name,
+                        tanggal_nota: formatIndonesianDateOnly(b.invoice_date),
+                        tanggal_terima: formatIndonesianDateTime(b.received_date),
+                        catatan_barang: b.items_summary || '-',
+                        catatan_cacat: b.damage_notes || '-',
+                        total_nilai_uang: b.total_amount || 0,
+                        metode_pembayaran: b.payment_method || 'Invoice',
+                        payment_status: isPendingAdmin ? 'DIISI_ADMIN_NANTI' : (b.due_status || 'Belum Lunas'),
+                        status_jatuh_tempo: isPendingAdmin ? 'Menunggu Admin' : (b.due_status || 'Belum Jatuh Tempo'),
+                        nominal_cash: b.cash_paid || 0,
+                        sudah_dibayar: b.paid_amount || 0,
+                        sisa_hutang: b.remaining_debt !== null ? b.remaining_debt : Math.max(0, (b.total_amount || 0) - (b.cash_paid || 0)),
+                        foto_bukti_nota: b.payment_proof_url || '',
+                        riwayat_pembayaran: typeof b.payment_history === 'string' ? b.payment_history : JSON.stringify(b.payment_history || [])
+                    };
+                });
+                return { success: true, data: mapped };
+            } catch (err) {
+                console.error('[getBarangDatangList error]', err);
+                return { success: true, data: [] };
+            }
+        },
+
+        // --- HELPER / KARNET APPROVALS ---
+        getPendingKarnetRequests: async function(user) {
+            const sb = getClient();
+            if (!sb) return { success: true, data: [] };
+            try {
+                const { data, error } = await sb
+                    .from('helper_assignment_requests')
+                    .select('*')
+                    .eq('status', 'PENDING')
+                    .order('created_at', { ascending: false });
+                if (error || !data) return { success: true, data: [] };
+                const mapped = data.map(r => ({
+                    driverId: r.driver_id,
+                    driverName: r.driver_name,
+                    prevKarnet: r.previous_helper || '-',
+                    newKarnet: r.requested_helper || '-',
+                    timestamp: formatIndonesianDateTime(r.request_date || r.created_at),
+                    status: r.status
+                }));
+                return { success: true, data: mapped };
+            } catch(e) {
+                return { success: true, data: [] };
+            }
+        },
+
+        respondChangeKarnet: async function(driverId, action) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                const status = action === 'APPROVE' ? 'DISETUJUI' : 'DITOLAK';
+                await sb.from('helper_assignment_requests')
+                    .update({ status: status })
+                    .eq('driver_id', driverId)
+                    .eq('status', 'PENDING');
+                return { success: true, message: `Permintaan karnet berhasil di-${status.toLowerCase()}` };
+            } catch(e) {
+                return { success: false, message: e.message };
+            }
+        },
+
+        dismissDriverKarnetRequest: async function(driverId) {
+            const sb = getClient();
+            if (!sb) return { success: true };
+            try {
+                await sb.from('helper_assignment_requests')
+                    .delete()
+                    .eq('driver_id', driverId);
+                return { success: true };
+            } catch(e) {
+                return { success: true };
+            }
         },
 
         // --- MODUL SOP HARIAN ---

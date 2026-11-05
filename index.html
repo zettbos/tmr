@@ -101,7 +101,7 @@
             // 4. UNIVERSAL GOOGLE.SCRIPT.RUN AUTO-FAILURE INJECTOR
             // Secara otomatis menyisipkan .withFailureHandler pada seluruh pemanggilan GAS yang lupa memasangnya
             function installGasAutoShield() {
-                if (typeof google === 'undefined' || !google.script || !google.script.run) return;
+                if (window.__TB_SUPABASE_ADAPTER_ACTIVE || typeof google === 'undefined' || !google.script || !google.script.run) return;
                 if (google.script._tamaraShieldActive) return;
                 google.script._tamaraShieldActive = true;
 
@@ -4178,7 +4178,9 @@
         const katK = document.getElementById('filterKategoriKhusus');
         const katKhusus = katK ? katK.value : '';
 
-        if (!appendLazy && !isSilent) {
+        const oCont = document.getElementById('ordersContainer');
+        const hasExistingRenderedCards = oCont && oCont.children.length > 1 && !oCont.querySelector('.animate-pulse');
+        if (!appendLazy && !isSilent && !hasExistingRenderedCards) {
             showSkeletonOrders();
         }
 
@@ -9404,6 +9406,10 @@
         if (isAdminOrOps) {
             if (res.data && res.data.length > 0) {
                 const req = res.data[0];
+                if (!req || !req.driverName || req.driverName === 'undefined' || !req.newKarnet || req.newKarnet === 'undefined') {
+                    closeModal('adminKarnetApprovalModal');
+                    return;
+                }
                 activeAdminKarnetReqDriverId = req.driverId;
 
                 const dNameEl = document.getElementById('approvalDriverName');
@@ -61820,7 +61826,15 @@
                         mBtn.classList.add('text-white', 'bg-white/10', 'font-black');
                     }
                 }
-                if (typeof loadOrders === 'function') { try { loadOrders(1); } catch (e) { console.warn(e); } }
+                const oCont = document.getElementById('ordersContainer');
+                const hasExistingRenderedCards = oCont && oCont.children.length > 1 && !oCont.querySelector('.animate-pulse');
+                if (typeof loadOrders === 'function') {
+                    try {
+                        loadOrders(1, false, Boolean(hasExistingRenderedCards));
+                    } catch (e) {
+                        console.warn(e);
+                    }
+                }
                 if (typeof triggerGlobalPajakPengingatCheck === 'function') { try { triggerGlobalPajakPengingatCheck(); } catch(e) {} }
             } else if (tabName === 'newOrder') {
                 const target = document.getElementById('tabNewOrder') || document.getElementById('tabCreateOrder');
