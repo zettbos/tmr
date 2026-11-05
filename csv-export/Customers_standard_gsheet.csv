@@ -1,0 +1,16 @@
+id,name,phone,address,maps_url,total_orders,created_at,standard_shipping_fee
+CUST-0001,Toko Bangunan Jaya,081234567895,"Jl. Merdeka No. 45, Jakarta Pusat","https://maps.google.com/?q=-6.175392,106.827153",10,2026-08-01 14:25:58,
+CUST-0002,Bapak H. Ahmad (Proyek Ruko),081987654321,"Jl. Sudirman No. 88, Tangerang","https://maps.google.com/?q=-6.178300,106.830000",5,2026-08-01 14:25:58,
+CUST-0003,CV Karya Utama,085678901234,"Jl. Gatot Subroto No. 12, Bekasi","https://maps.google.com/?q=-6.200000,106.850000",3,2026-08-01 14:25:58,
+CUST-0004,Bpk ijul,081258411318,Jl loa tebu gg 03 rt 04 no 51. Sebelah sungai rumah warna coklat atap biru.,https://maps.app.goo.gl/ANKQJnsFAeiYTK2u9?g_st=ic,27,2026-08-02 14:12:40,30000
+CUST-0005,Ibu sartika,085147392007,Jl mangkurawang rt 03 no 57 rumah sebelah sungai pagar beton hitam ada pohon mangga depan rumahnya. Rumah atap biru sebelah kanan jalan. Tanya saja mana bayu semua orang tahu disana,https://maps.app.goo.gl/h4Qkd4zexxwZFQos5?g_st=ic,5,2026-08-04 13:34:09,
+CUST-0006,Bpk abdul,081258411318,Jalan kampung baru depan indomaret,,1,2026-08-07 14:03:47,
+CUST-0007,Bos loa tebu,082277115600,Jalan kartini depan mosholla biasa maantar,,3,2026-08-08 08:26:43,
+CUST-0008,Bpk. Daus,081258411318,Jl loa tebu rt01 no 74 rumah pagar beton warna hitam sebelah rumah pak rt,https://maps.app.goo.gl/ANKQJnsFAeiYTK2u9?g_st=ic,0,2026-08-10 19:43:06,
+CUST-0009,Bpk. Ali,085147392001,Jl mangkurawang rt03 depan gang 07 rumah pagar besi sebelah sungai,https://maps.app.goo.gl/XifU62DjYsyGeZsN7?g_st=ic,2,2026-08-10 19:45:04,
+CUST-0010,Bpk. Faisal,085245982000,Jl sukarame belakang kursus bahasa inggris AEC,https://maps.app.goo.gl/xah4qddzUTL2SWLH9?g_st=ic,3,2026-08-10 19:47:08,
+CUST-0011,Bpk. Samsuri,08126946522‬,Jl kramajaya ruko tingkat 2 samping pasar mangkurawang.,https://maps.app.goo.gl/gv5AubKymLdsu8pQ6?g_st=ic,3,2026-08-10 19:49:11,
+CUST-0014,Bpk amir,0812558411318,Jl maduningrat,,2,2026-08-24 01:39:08,20000
+CUST-0015,Amir,081258411318,Jl. Mangkurawang rt03,,2,2026-08-24 12:27:06,
+CUST-0016,BPK ali,085147392002,Jl tambak Rell perumahan Jokowi block D 5,,1,2026-09-05 13:35:51,
+CUST-0017,Mama dayat,081258411318,Jl mangkuraja 1 rt 05 no 63 atap rumah warna biru rumah warna kuning,,1,2026-09-06 10:46:47,

@@ -1,0 +1,5 @@
+id,plate_number,vehicle_type,default_driver,current_km,last_fuel_date,total_fuel_liters,last_oil_km,oil_interval_km,oil_status,remaining_oil_km,photo_url,status,created_at
+KND-002,KT 8136 CM,L300,FAHRI,175769,2026-09-22,30,171759,5000,Segera Ganti Oli,990,,true,2026-09-10 08:24:37
+KND-002,KT 8329 UA,L300,Fi’i (komandan),185348,2026-09-22,30,181548,5000,Segera Ganti Oli,1200,,true,2026-09-10 08:26:33
+KND-003,KT 8240 NB,TS120 ss,ASWIN,143741,2026-10-09,0,143741,5000,Oli Aman,5000,,true,2026-09-10 08:28:25
+KND-004,KT 8919 UQ,TRAGA,Fi’i (komandan),12000,2026-09-22,60,9000,5000,Oli Aman,2000,,true,2026-09-10 08:31:55

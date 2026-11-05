@@ -1,0 +1,2 @@
+id,service_date,plate_number,driver_id,driver_name,service_km,transaction_type,oil_brand,liters,total_cost,workshop_name,km_photo_url,receipt_photo_url,notes,created_at
+OLI-260922-401,2026-09-22,KT 8919 UQ,USR-001,AMI,9000,Ganti Oli,Pertamina Fastron 10W-40,4,360000,BENGKEL PAKLE LOA TEBU,https://drive.google.com/thumbnail?id=1GrGSvvI3wEh_5Qgx9neqRj-njKUS0GMw&sz=w800,https://drive.google.com/thumbnail?id=1t8Yp40QJ1zwq16FjZ3rjzPtmuxzqg9AZ&sz=w800,[Metode: Transfer],2026-09-22 10:55:06

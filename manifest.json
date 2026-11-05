@@ -1,0 +1,21 @@
+{
+  "name": "Tamara Delivery PRO",
+  "short_name": "TMR",
+  "description": "Sistem Operasional & Pengantaran Toko Bangunan Tamara (TMR)",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#060d17",
+  "theme_color": "#060d17",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512 192x192 128x128 64x64",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

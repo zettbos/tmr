@@ -1,0 +1,10 @@
+key,value,description
+mulai_pengingat_hari,7,Jumlah hari sebelum jatuh tempo untuk memunculkan alert
+jam_pengingat_wita,0.31875,Jam penayangan notifikasi WITA
+kirim_ke_target,Admin,Target notifikasi (Semua User / User Tertentu)
+aktif_pajak_1thn,true,Aktifkan pengingat Pajak 1 Tahun
+aktif_pajak_5thn,false,Aktifkan pengingat Pajak 5 Tahun
+aktif_kir_mobil,false,Aktifkan pengingat KIR Mobil
+target_personil_spesifik,,Setting Pengingat
+tanggal_custom_pengingat,,Setting Pengingat
+tugas_pesan_aktif_json,"[{""isActive"":true,""mulai_hari"":""7"",""aktif_kir_mobil"":false,""aktif_pajak_1thn"":true,""createdAt"":""2026-09-20T07:31:44.783Z"",""target_personil_spesifik"":"""",""target"":""Admin"",""title"":""Broadcast Pengingat (Admin)"",""tanggal_custom_pengingat"":"""",""updatedAt"":""2026-09-21T23:37:19.119Z"",""aktif_pajak_5thn"":false,""jam"":""07:39"",""id"":""tugas_pajak_1789889504783""}]",Setting Pengingat

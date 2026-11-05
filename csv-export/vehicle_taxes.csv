@@ -1,0 +1,8 @@
+id,vehicle_type,owner_name,plate_number,brand,model,year,tax_1yr_date,tax_5yr_date,kir_date,notes,stnk_photo_url,qr_pertamina_url,created_at,is_active
+PJK-001,Mobil,Budi Santoso,KT 1234 AB,Toyota,Innova,2020,2026-10-10,2029-09-15,,Pajak 1 tahun 2026,https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=800&q=80,https://drive.google.com/thumbnail?id=1loFMNL1x8OsEYVzSRqaxn-U747K8eJ_K&sz=w800,2026-09-15 23:47:37,true
+PJK-002,Motor,Andi Pratama,KT 5678 CD,Yamaha,NMAX,2021,2026-11-28,2029-11-20,,,https://drive.google.com/thumbnail?id=1HKbrseqHLY6njHGI9RMJt3cRcqfdDX3S&sz=w800,,2026-09-15 23:47:37,true
+PJK-003,Mobil,Siti Nurhayati,KT 9012 EF,Mitsubishi,L300,2018,2026-09-17,2030-01-10,2026-09-18,Khusus pickup,,,2026-09-15 23:47:37,true
+PJK-004,Motor,Rudi Irawan,KT 3456 GH,Honda,Beat,2019,2026-08-05,2030-08-05,,,,,2026-09-15 23:47:37,true
+PJK-005,Mobil,TB Tamara Logistik,KT 8919 UQ,Isuzu,Traga,2022,2027-01-30,2030-04-12,2026-04-12,,,,2026-09-15 23:47:37,true
+PJK-260917-252,Mobil,HUSNI,KT 1753 CK,Toyota,Avanza veloz,2012,2026-12-05,2027-12-05,,Mobil avanza veloz hitam,https://drive.google.com/thumbnail?id=1UTiyeqi4pIUnBOn3jhCNHPBJlz4ttW19&sz=w800,https://drive.google.com/thumbnail?id=1v1HGNLAS3rDT0lbmR0mqKEckekRD3Wo1&sz=w800,2026-09-17 01:47:06,true
+PJK-005,Mobil,NURLINA,KT 1663 OY,Toyota,Innova,2010,2026-08-30,2027-08-30,,Mobil innova grey,,,2026-09-20 15:53:54,true

@@ -1,0 +1,6 @@
+id,name,phone,address,notes,created_at,created_by,category,default_due_days
+SUP-001,PT. Maju Jaya,081234567801,"Jl. Industri No. 1, Balikpapan",Distributor Semen & Besi,2026-08-23 19:30:10,System,,
+SUP-002,CV. Sumber Bangunan,081234567802,"Jl. Pembangunan No. 12, Samarinda",Supplier Cat & Keramik,2026-08-23 19:30:10,System,Semen & Besi,30
+SUP-003,Toko Makmur,081234567803,"Jl. Sentosa No. 88, Tenggarong",Supplier Pipa & Sanitary,2026-08-23 19:30:10,System,,
+SUP-004,PT. Anugrah nusantara,081258411318,Samarinda,,2026-08-24 02:19:01,TAMARA BANGUNAN (Staff Toko),,
+SUP-005,PT. Global Indonesia Asia Sejahtera,085322225850,"JL. Tengku umar pergudangan tahap 3 block C no 2, karang asam ulu, Sei kunjang, Samarinda, kalimantan timur",Khusus barangnya gnet,,,Baja Ringan & Atap,30

@@ -1,0 +1,6 @@
+id,service_date,plate_number,driver_id,driver_name,current_km,workshop_name,cost,repair_details,receipt_photo_url,created_at
+SRV-260910-342,2026-09-09,KT 8329 UA,USR-001,AMI,181548,BENGKEL PAKLE LOA TEBU,1200000,"Ganti oli. 
+Ganti busi pemanas
+Baiki kaca kunci pintu
+Baiki klakson",https://drive.google.com/file/d/1fFlV15f5NpCdYOYZGkBKM5wI_PW1EPQJ/view?usp=drivesdk,2026-09-10 11:27:23
+SRV-260922-248,2026-09-22,KT 8329 UA,USR-001,AMI,185348,Bengkel Jaya Abadi,500000,[Metode: Transfer],https://drive.google.com/thumbnail?id=1bcHZTZaFn6LTOJUGQRqS4HNa43Lqky2v&sz=w800,2026-09-22 21:47:12

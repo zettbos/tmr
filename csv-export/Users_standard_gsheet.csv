@@ -1,0 +1,14 @@
+user_code,full_name,username,password,role,phone,is_active,created_at,shift_start,shift_end
+USR-001,AMI,admin,admin123,Super Admin,081258411318,true,2026-08-01 14:25:58,,
+USR-002,TAMARA BANGUNAN,staff2,staff123,Staff Toko,085147392002,true,2026-08-01 14:25:58,,
+USR-003,STAFF PENGECEKAN,checker,checker123,Petugas Pengecek,085147392001,true,2026-08-01 14:25:58,,
+USR-004,01   PENGANTARAN,driver1,driver123,Sopir,085147392005,true,2026-08-01 14:25:58,,
+USR-005,02   PENGANTARAN,driver2,driver123,Sopir,085147392006,true,2026-08-01 14:25:58,,
+USR-007,STAFF OPERASIONAL,staff3,staff123,Staff Operasional,08126946522,true,2026-08-06 02:51:43,,
+USR-011,Taher,taher,taher123,Karnet,,true,2026-08-08 03:51:18,08:00,18:00
+USR-012,PENGECEKAN TOKO,checker2,checker123,Checker Baru,,true,2026-08-10 11:16:31,,
+USR-013,Zainal,zainal,zainal123,Karnet,,true,2026-08-22 21:30:58,,
+USR-014,Nazari,nazar,nazar123,Karnet,,true,2026-08-22 21:32:03,,
+USR-015,Bebayu,bebayu,bebayu123,Karnet,,true,2026-08-22 21:36:04,,
+USR-018,TES,TES,TES,Super Admin,,true,2026-08-23 18:56:00,,
+USR-019,ASWIN,aswin,aswin123,Sopir,,true,2026-09-09 17:35:12,,

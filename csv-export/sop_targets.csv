@@ -1,0 +1,3 @@
+id,sop_id,start_date,schedule_times,is_recurring_daily,target_roles,target_users,is_notif_active
+JADWAL-SOP-1792160722783,SOP-1792160722783,2026-10-16,"[""00.07 WITA""]",true,[],"[""USR-002"",""USR-004"",""USR-005"",""staff2"",""driver1"",""driver2"",""TAMARA BANGUNAN"",""01   PENGANTARAN"",""02   PENGANTARAN"",""sopir 4"",""sopir 04"",""driver 4"",""driver 04"",""04 pengantaran"",""pengantaran 04"",""sopir 5"",""sopir 05"",""driver 5"",""driver 05"",""05 pengantaran"",""pengantaran 05""]",true
+JADWAL-SOP-1792938516584,SOP-1792938516584,2026-10-25,"[""22.32 WITA""]",true,[],"[""USR-002"",""USR-004"",""staff2"",""driver1"",""TAMARA BANGUNAN"",""01   PENGANTARAN"",""sopir 4"",""sopir 04"",""driver 4"",""driver 04"",""04 pengantaran"",""pengantaran 04""]",true

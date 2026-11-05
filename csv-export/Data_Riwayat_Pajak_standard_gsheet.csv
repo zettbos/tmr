@@ -1,0 +1,7 @@
+id,tax_id,plate_number,owner_name,payment_type,payment_date,amount,new_stnk_photo_url,notes,admin_name,created_at
+BYR-001,PJK-001,KT 8321 ZM,Andi Pratama,Kir Mobil,2024-07-22,450000,,Kir Mobil 2024,Admin,2026-09-15 23:47:37
+BYR-002,PJK-002,KT 4516 QP,Siti Rahmawati,Kir Mobil,2023-03-10,500000,,Kir Mobil 2023,Admin,2026-09-15 23:47:37
+BYR-003,PJK-003,DA 7293 BK,Ahmad Hidayat,Kir Mobil,2022-01-05,450000,,Kir Mobil 2022,Admin,2026-09-15 23:47:37
+BYR-004,PJK-004,KT 9087 LC,Rina Malasari,Kir Mobil,2020-11-17,400000,,Kir Mobil 2020,Admin,2026-09-15 23:47:37
+BYR-260916-677,PJK-001,KT 1234 AB,Budi Santoso,Pajak 1 Tahun,2026-09-15,0,https://drive.google.com/file/d/1fSWl-Qi0wDDBbxZYbN2w8gHw_WQOeKfm/view?usp=drivesdk,Pajak 1 tahun,AMI,2026-09-16 00:15:51
+BYR-260919-745,PJK-002,KT 5678 CD,Andi Pratama,Pajak 1 Tahun,2026-09-19,0,https://drive.google.com/thumbnail?id=1B6xLrD3aTz8dSoqbxGeFhUA-3g6wDCdu&sz=w800,,AMI,2026-09-19 00:02:15

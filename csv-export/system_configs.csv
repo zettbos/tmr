@@ -1,0 +1,12 @@
+key,value,description
+logo_url,,URL Gambar Logo Perusahaan (Support lh3.googleusercontent.com / Google Drive / URL Gambar)
+nama_perusahaan,TB Tamara,Nama Toko / Perusahaan
+deskripsi_perusahaan,Sistem Pengantaran Toko Bangunan,Deskripsi Singkat Perusahaan
+ongkir_batas_km_gratis,3,Setting Ongkir
+ongkir_tarif_per_km,5000,Setting Ongkir
+ongkir_minimal,0,Setting Ongkir
+ongkir_toko_nama,Toko Tamara,Setting Ongkir
+ongkir_toko_alamat,Jl. Mangkurawang RT 06 depan SDN 004,Setting Ongkir
+ongkir_toko_lat,-0.386313,Setting Ongkir
+ongkir_toko_lng,116.98974,Setting Ongkir
+logo pertamina,https://drive.google.com/file/d/17IjvssU3fB24y_dSip9ui73VLe_lrhG-/view?usp=sharing,URL Gambar Logo Pertamina Resmi (Support Google Drive / URL Gambar)
