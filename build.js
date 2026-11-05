@@ -36,9 +36,9 @@ indexHtml = indexHtml.replace(includeRegex, (match, filename) => {
 
 console.log(`[Build] Berhasil menyatukan ${matchCount} modul HTML ke dalam 1 Single-Page Web App.`);
 
-// Ganti variabel template scriptlet GAS
-indexHtml = indexHtml.replace(/<\?\=\s*typeof trackId[^\?]*\?>/g, "''");
-indexHtml = indexHtml.replace(/<\?\=\s*typeof webAppUrl[^\?]*\?>/g, "window.location.origin");
+// Ganti variabel template scriptlet GAS dengan tepat tanpa memotong isi file
+indexHtml = indexHtml.replaceAll('"<?= typeof trackId !== \'undefined\' ? trackId : \'\' ?>"', '""');
+indexHtml = indexHtml.replaceAll('"<?= typeof webAppUrl !== \'undefined\' ? webAppUrl : \'\' ?>"', 'window.location.origin');
 
 // Ganti getCanonicalWebAppUrl agar mengembalikan domain live Vercel / window.location.origin
 indexHtml = indexHtml.replace(/function getCanonicalWebAppUrl\(\)\s*\{[\s\S]*?return\s+['"]https:\/\/script\.google\.com[^\n;]+;?\s*\}/, "function getCanonicalWebAppUrl() {\n            return window.location.origin;\n        }");

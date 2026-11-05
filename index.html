@@ -193,8 +193,8 @@
         var currentPage = 1;
         var maxOrderPages = 1;
         var currentLandingSubTab = 'track';
-        var autoTrackId = "<?= typeof trackId !== 'undefined' ? trackId : '' ?>";
-        var serverWebAppUrl = "<?= typeof webAppUrl !== 'undefined' ? webAppUrl : '' ?>";
+        var autoTrackId = "";
+        var serverWebAppUrl = window.location.origin;
         var reportDataCache = [];
         var customerListCache = [];
         var driversListCache = [];
@@ -60767,8 +60767,8 @@
         var currentPage = window.currentPage || 1;
         var maxOrderPages = window.maxOrderPages || 1;
         var currentLandingSubTab = window.currentLandingSubTab || 'track';
-        var autoTrackId = window.autoTrackId || "<?= typeof trackId !== 'undefined' ? trackId : '' ?>";
-        var serverWebAppUrl = window.serverWebAppUrl || "<?= typeof webAppUrl !== 'undefined' ? webAppUrl : '' ?>";
+        var autoTrackId = window.autoTrackId || "";
+        var serverWebAppUrl = window.serverWebAppUrl || window.location.origin;
         var reportDataCache = window.reportDataCache || [];
         var customerListCache = window.customerListCache || [];
         var driversListCache = window.driversListCache || [];

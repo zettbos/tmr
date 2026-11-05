@@ -837,6 +837,162 @@
             };
         },
 
+        getPajakKendaraanList: async function() {
+            const sb = getClient();
+            if (!sb) return { success: true, data: [] };
+
+            const { data, error } = await sb.from('vehicle_taxes').select('*').order('created_at', { ascending: false });
+            if (error) {
+                console.error('[Adapter getPajakKendaraanList error]', error);
+                return { success: false, data: [], message: error.message };
+            }
+
+            const list = (data || []).map(row => ({
+                id_kendaraan: row.id,
+                jenis: row.vehicle_type || 'Mobil',
+                nama_pemilik: row.owner_name || '',
+                no_polisi: row.plate_number || '',
+                merk: row.brand || '',
+                tipe_model: row.model || '',
+                tahun: row.year || '',
+                pajak_1_tahun: row.tax_1yr_date || '',
+                pajak_5_tahun: row.tax_5yr_date || '',
+                kir_mobil: row.kir_date || '',
+                catatan: row.notes || '',
+                stnk_url: row.stnk_photo_url || '',
+                qr_url: row.qr_pertamina_url || '',
+                is_active: row.is_active !== false
+            }));
+
+            return { success: true, data: list };
+        },
+
+        savePajakKendaraan: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database tidak terhubung' };
+
+            const isEdit = !!payload.id_kendaraan;
+            const idKendaraan = payload.id_kendaraan || ('PJK-' + Date.now().toString().slice(-6));
+
+            const record = {
+                id: idKendaraan,
+                vehicle_type: payload.jenis || 'Mobil',
+                owner_name: payload.nama_pemilik || '',
+                plate_number: payload.no_polisi || '',
+                brand: payload.merk || '',
+                model: payload.tipe_model || '',
+                year: payload.tahun || '',
+                tax_1yr_date: payload.pajak_1_tahun || null,
+                tax_5yr_date: payload.pajak_5_tahun || null,
+                kir_date: payload.kir_mobil || null,
+                notes: payload.catatan || '',
+                stnk_photo_url: payload.stnk_url || '',
+                qr_pertamina_url: payload.qr_url || '',
+                is_active: true
+            };
+
+            let res;
+            if (isEdit) {
+                res = await sb.from('vehicle_taxes').update(record).eq('id', idKendaraan);
+            } else {
+                res = await sb.from('vehicle_taxes').insert([record]);
+            }
+
+            return {
+                success: !res.error,
+                message: res.error ? res.error.message : (isEdit ? 'Kendaraan berhasil diupdate!' : 'Kendaraan berhasil ditambahkan!'),
+                id: idKendaraan
+            };
+        },
+
+        deletePajakKendaraan: async function(idKendaraan) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            const { error } = await sb.from('vehicle_taxes').delete().eq('id', idKendaraan);
+            return { success: !error, message: error ? error.message : 'Kendaraan berhasil dihapus!' };
+        },
+
+        getSettingPengingatPajak: async function() {
+            const sb = getClient();
+            if (!sb) return { success: true, data: {} };
+
+            const { data } = await sb.from('tax_reminder_settings').select('*');
+            const config = {};
+            (data || []).forEach(item => {
+                config[item.key] = item.value;
+            });
+
+            let taskList = [];
+            if (config.tugas_pesan_aktif_json) {
+                try {
+                    taskList = JSON.parse(config.tugas_pesan_aktif_json);
+                } catch(e) {}
+            }
+            config.tugas_pesan_aktif = taskList;
+
+            return { success: true, data: config };
+        },
+
+        saveSettingPengingatPajak: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+
+            const updates = [
+                { key: 'mulai_pengingat_hari', value: String(payload.mulai_pengingat_hari || payload.mulai_hari || '7') },
+                { key: 'jam_pengingat_wita', value: String(payload.jam_pengingat_wita || payload.jam || '08:00') },
+                { key: 'kirim_ke_target', value: String(payload.kirim_ke_target || payload.target || 'Semua User') },
+                { key: 'aktif_pajak_1thn', value: String(payload.aktif_pajak_1thn !== false) },
+                { key: 'aktif_pajak_5thn', value: String(payload.aktif_pajak_5thn !== false) },
+                { key: 'aktif_kir_mobil', value: String(payload.aktif_kir_mobil !== false) }
+            ];
+
+            if (payload.tugas_pesan_aktif) {
+                updates.push({
+                    key: 'tugas_pesan_aktif_json',
+                    value: typeof payload.tugas_pesan_aktif === 'string' ? payload.tugas_pesan_aktif : JSON.stringify(payload.tugas_pesan_aktif)
+                });
+            }
+
+            for (const item of updates) {
+                await sb.from('tax_reminder_settings').upsert(item);
+            }
+
+            return { success: true, message: 'Pengaturan pengingat berhasil disimpan!' };
+        },
+
+        saveTugasPesanAktifCloud: async function(jsonStr) {
+            const sb = getClient();
+            if (!sb) return { success: false };
+            await sb.from('tax_reminder_settings').upsert({
+                key: 'tugas_pesan_aktif_json',
+                value: typeof jsonStr === 'string' ? jsonStr : JSON.stringify(jsonStr)
+            });
+            return { success: true, message: 'Tugas pengingat tersimpan di cloud!' };
+        },
+
+        getRiwayatPajakList: async function() {
+            const sb = getClient();
+            if (!sb) return { success: true, data: [] };
+
+            const { data, error } = await sb.from('tax_payment_logs').select('*').order('created_at', { ascending: false });
+            if (error) return { success: false, data: [] };
+
+            const list = (data || []).map(r => ({
+                id_transaksi: r.id,
+                id_kendaraan: r.tax_id || '',
+                no_polisi: r.plate_number || '',
+                nama_pemilik: r.owner_name || '',
+                jenis_pembayaran: r.payment_type || 'Pajak 1 Tahun',
+                tanggal_bayar: r.payment_date || '',
+                nominal_biaya: Number(r.amount || 0),
+                url_foto_stnk_baru: r.new_stnk_photo_url || '',
+                catatan: r.notes || '',
+                admin_penginput: r.admin_name || ''
+            }));
+
+            return { success: true, data: list };
+        },
+
         submitPembayaranPajak: async function(payload) {
             const sb = getClient();
             if (!sb) return { success: false };
@@ -1051,6 +1207,12 @@
                 })
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, (payload) => {
                     console.log('[Realtime TMR] Log aktivitas baru:', payload.new?.action, payload.new?.user_name);
+                })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_taxes' }, (payload) => {
+                    console.log('[Realtime TMR] Perubahan data Pajak Kendaraan:', payload.eventType);
+                    if (typeof window.checkAndShowPajakAlert === 'function') {
+                        try { window.checkAndShowPajakAlert(false); } catch (e) {}
+                    }
                 })
                 .subscribe((status, err) => {
                     console.log('[Realtime TMR] Status koneksi Realtime:', status);
