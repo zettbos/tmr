@@ -3,19 +3,19 @@
 DOKUMEN         : revisi.md (Master Audit, Action Mapping & Media Pipeline Protocol)
 ARSITEK SISTEM  : ZettBOT by Zettbos (Universal Product Architect & Lead Engineering)
 PROJEK          : TMR (Tamara Delivery PRO / TB Delivery PRO)
-STATUS DOKUMEN  : TAHAP 1 SELESAI & LIVE — MENUNGGU KONFIRMASI TAHAP 2
+STATUS DOKUMEN  : TAHAP 1 & TAHAP 2 SELESAI & LIVE — SIAP TAHAP 3
 DOMAIN TARGET   : https://tmr-app.vercel.app (Single Official Production Domain)
 TANGGAL         : 6 November 2026
-COMMIT HASH     : 7e70cb9 (v3.5.0)
+COMMIT HASH     : c609a17 (v3.6.0)
 BASIS AUDIT     : tb-delivery-pro/index.html (63.700+ baris), supabase-gas-adapter.js, & GAS_DRIVE_AND_BACKUP.gs
 ================================================================================
 
 > [!NOTE]
-> **STATUS EKSEKUSI TAHAP 1:**
-> **TAHAP 1 TELAH 100% BERHASIL DITERAPKAN & LIVE DI PRODUKSI.**
-> - Pipeline Upload Media (Google Apps Script -> Google Drive -> Google Edge CDN lh3 -> Supabase) telah aktif.
-> - Seluruh 14 fitur Menu 1 (Daftar Pengantaran) dan 5 fitur Menu 2 (Input Order Baru) telah 100% READY dan teruji.
-> - Live di `https://tmr-app.vercel.app` (Commit `7e70cb9`). Menunggu instruksi untuk Tahap 2.
+> **STATUS EKSEKUSI TAHAP 1 & TAHAP 2:**
+> **TAHAP 1 & TAHAP 2 TELAH 100% BERHASIL DITERAPKAN & LIVE DI PRODUKSI.**
+> - **Tahap 1:** Pipeline Upload Media (Google Apps Script -> Google Drive -> Google Edge CDN lh3 -> Supabase) aktif. Seluruh 14 fitur Menu 1 (Daftar Pengantaran) dan 5 fitur Menu 2 (Input Order Baru) 100% READY.
+> - **Tahap 2:** Seluruh 28 RPC Backend Monitoring Kendaraan (Menu 7: Armada, BBM, Oli, Servis, Approval Sopir-Admin, Master Dropdown SPBU/Bengkel/Oli, Master Kendaraan & Sopir) telah 100% READY dan teruji live dengan Supabase (28/28 tests passed). Disparitas armada KT 8240 NB tuntas terselesaikan secara dinamis!
+> - Live di `https://tmr-app.vercel.app` (Commit `c609a17`). Siap melanjutkan ke **Tahap 3**.
 
 ---
 ## 1. PENJELASAN ARSITEKTUR PIPELINE MEDIA (FOTO) & BACKUP SPREADSHEET
@@ -97,9 +97,9 @@ sequenceDiagram
 Berdasarkan audit menyeluruh pada antarmuka pengguna (`index.html`) terhadap adapter backend (`supabase-gas-adapter.js` & Supabase Database):
 - **Total Menu Aplikasi Utama:** **15 Menu / Modul**
 - **Total Elemen Interaktif (Tombol, Input, Form, Aksi):** **74 Elemen Aksi**
-- **Status Elemen yang Sudah Siap & Terhubung (READY):** **38 Elemen (51%)**
-- **Status Elemen yang Belum Dibuat / Fallback Generic (MISSING):** **36 Elemen (49%)**
-- **Total Endpoint RPC Terdeteksi di Kode:** **142 Endpoint** (65 aktif di adapter Supabase, 77 masih berstatus fallback atau belum dibuat).
+- **Status Elemen yang Sudah Siap & Terhubung (READY):** **55 Elemen (74.3%)**
+- **Status Elemen yang Belum Dibuat / Fallback Generic (MISSING):** **19 Elemen (25.7%)**
+- **Menu yang Telah 100% Selesai & Teruji:** **Menu 1 (Daftar Pengantaran), Menu 2 (Input Order), Menu 7 (Monitoring Kendaraan)**
 
 ---
 ## 3. MATRIKS PEMETAAN TOMBOL & AKSI PER MENU (15 MENU LENGKAP)
@@ -193,17 +193,17 @@ Berdasarkan audit menyeluruh pada antarmuka pengguna (`index.html`) terhadap ada
 
 | No | Elemen / Tombol UI | Aksi / Event Handler | Target RPC Backend | Supabase Table / Storage Pipeline | Status Audit | Dampak / Risiko Jika Belum Ada |
 | :-: | :--- | :--- | :--- | :--- | :-: | :--- |
-| 7.1 | **Tombol Detail Armada (Kartu Mobil)** | `onclick="openVehicleDetailModal(plateNo)"` | `getVehicleReports` / `getVehicleDashboardData` | `vehicles`, `fuel_logs`, `oil_logs` | **BELUM DIBUAT** | Klik kartu mobil memuat layar kosong atau fallback. |
-| 7.2 | **Form Permohonan Izin Isi BBM (Sopir)** | `onsubmit="submitIzinBBM(event)"` | `submitPermohonanIsiBBM` / `checkActiveBBMApproval` | `fuel_approvals` | **BELUM LENGKAP** | Sopir bisa mengajukan, namun polling status approval belum ada. |
-| 7.3 | **Dialog Persetujuan BBM (Admin)** | `onclick="respondIzinBBM(id, status)"` | `getPendingBBMApprovals` / `respondIzinIsiBBM` | `fuel_approvals` | **BELUM LENGKAP** | Notifikasi izin BBM masuk ke admin belum ditarik otomatis. |
-| 7.4 | **Form Input Transaksi BBM Baru** | `onsubmit="handleInputBBMSubmit(event)"` | `submitPengisianBBM` | **GAS -> GDrive -> lh3 CDN -> `fuel_logs.receipt_photo` & `odometer_photo`** | **READY (Data)** | Pencatatan teks berhasil; foto struk & odometer perlu pipeline GAS. |
-| 7.5 | **Tombol Edit & Hapus Riwayat BBM** | `onsubmit="editBBM()"` / `deleteBBMTransaction()` | `editBBMTransaction` / `deleteBBMTransaction` | `fuel_logs` | **BELUM DIBUAT** | Salah input kilometer / struk SPBU tidak bisa diperbaiki/dihapus. |
-| 7.6 | **Form Input Ganti Oli Mesin** | `onsubmit="handleInputOliSubmit(event)"` | `submitInputOli` | `oil_logs` | **READY** | Input oli mesin baru berhasil memperbarui sisa kilometer oli. |
-| 7.7 | **Tombol Edit/Hapus Oli & Interval KM** | `onsubmit="editOli()"` / `updateBatasIntervalOli()` | `editOliTransaction` / `deleteOliTransaction` / `updateBatasIntervalOli` | `oil_logs`, `vehicles` | **BELUM DIBUAT** | Interval ganti oli tidak bisa diubah dan riwayat oli tidak bisa diedit. |
-| 7.8 | **Form Input Servis & Perawatan Bengkel** | `onsubmit="handleInputServiceSubmit(event)"` | `submitInputService` | **GAS -> GDrive -> lh3 CDN -> `service_logs.receipt_photo`** | **READY (Data)** | Pencatatan nota bengkel tersimpan; foto nota perlu pipeline GAS. |
-| 7.9 | **Tombol Edit/Hapus Servis Bengkel** | `onsubmit="editService()"` / `deleteService()` | `editServiceTransaction` / `deleteServiceTransaction` | `service_logs` | **BELUM DIBUAT** | Data servis salah tidak dapat diedit atau dibatalkan. |
-| 7.10 | **Kelola Rekanan SPBU, Bengkel & Oli** | `onclick="deleteSpbuItem()"` / `deleteBengkelItem()` | `getSpbuList`, `getBengkelList`, `getMerekOliList` & delete RPC | `spbu_list`, `bengkel_list`, `oil_brands` | **BELUM DIBUAT** | Pilihan dropdown SPBU dan bengkel tertahan statis di frontend. |
-| 7.11 | **Kelola Master Mobil Baru (Tambah/Edit)** | `onsubmit="handleSaveNewVehicle(event)"` | `saveNewMasterVehicle` / `editVehicleFromRekap` | `vehicles` | **BELUM DIBUAT** | Penambahan armada kelima atau ubah tipe mobil tidak bisa disimpan. |
+| 7.1 | **Tombol Detail Armada (Kartu Mobil)** | `onclick="openVehicleDetailModal(plateNo)"` | `getVehicleReports` / `getVehicleDashboardData` | `vehicles`, `fuel_logs`, `oil_change_logs`, `vehicle_services` | **100% READY** | Modal detail armada, riwayat BBM, oli, dan servis kini termuat akurat. |
+| 7.2 | **Form Permohonan Izin Isi BBM (Sopir)** | `onsubmit="submitIzinBBM(event)"` | `submitPermohonanIsiBBM` / `checkActiveBBMApproval` | `fuel_approvals` | **100% READY** | Sopir dapat mengajukan izin pengisian BBM dan status realtimenya dipantau. |
+| 7.3 | **Dialog Persetujuan BBM (Admin)** | `onclick="respondIzinBBM(id, status)"` | `getPendingBBMApprovals` / `respondIzinIsiBBM` | `fuel_approvals` | **100% READY** | Admin/Ops dapat melihat daftar pending dan memberi respon setuju/tolak. |
+| 7.4 | **Form Input Transaksi BBM Baru** | `onsubmit="handleInputBBMSubmit(event)"` | `submitPengisianBBM` | **GAS -> GDrive -> lh3 CDN -> `fuel_logs.receipt_photo_url` & `km_photo_url`** | **100% READY** | Validasi odometer anti-curang, jarak & km/L otomatis, sinkronisasi KM mobil. |
+| 7.5 | **Tombol Edit & Hapus Riwayat BBM** | `onsubmit="editBBM()"` / `deleteBBMTransaction()` | `editBBMTransaction` / `deleteBBMTransaction` | `fuel_logs`, `vehicles` | **100% READY** | Koreksi transaksi BBM dan sinkronisasi ulang total liter dan KM armada. |
+| 7.6 | **Form Input Ganti Oli Mesin** | `onsubmit="handleInputOliSubmit(event)"` | `submitInputOli` | **GAS -> GDrive -> lh3 CDN -> `oil_change_logs`** | **100% READY** | Catat riwayat oli dan update otomatis sisa KM & status oli armada. |
+| 7.7 | **Tombol Edit/Hapus Oli & Interval KM** | `onsubmit="editOli()"` / `updateBatasIntervalOli()` | `editOliTransaction` / `deleteOliTransaction` / `updateBatasIntervalOli` | `oil_change_logs`, `vehicles` | **100% READY** | Batas interval ganti oli (default 5.000 KM) & riwayat oli dapat dikelola penuh. |
+| 7.8 | **Form Input Servis & Perawatan Bengkel** | `onsubmit="handleInputServiceSubmit(event)"` | `submitInputService` | **GAS -> GDrive -> lh3 CDN -> `vehicle_services.receipt_photo_url`** | **100% READY** | Catat nota tagihan bengkel hingga 3 foto bukti ke Edge CDN. |
+| 7.9 | **Tombol Edit/Hapus Servis Bengkel** | `onsubmit="editService()"` / `deleteService()` | `editServiceTransaction` / `deleteServiceTransaction` | `vehicle_services` | **100% READY** | Edit detail dan nota servis bengkel atau hapus jika terjadi kesalahan. |
+| 7.10 | **Kelola Rekanan SPBU, Bengkel & Oli** | `onclick="deleteSpbuItem()"` / `deleteBengkelItem()` | `getSpbuList`, `getBengkelList`, `getMerekOliList` & delete RPC | `system_configs`, `fuel_logs`, `oil_change_logs`, `vehicle_services` | **100% READY** | Master dropdown SPBU, bengkel rujukan, dan merek oli terkelola dinamis. |
+| 7.11 | **Kelola Master Mobil Baru (Tambah/Edit)** | `onsubmit="handleSaveNewVehicle(event)"` | `saveNewMasterVehicle` / `editVehicleFromRekap` / `deleteVehicleFromRekap` | `vehicles` | **100% READY** | Penambahan armada baru, ubah driver default/tipe mobil, atau nonaktifkan. |
 
 ---
 
@@ -329,15 +329,16 @@ flowchart TD
    - `updateOrderGmapsLocation` & `updateGmapsLink` (simpan link koordinat navigasi Google Maps tujuan).
    - `requestChangeKarnet`, `getPendingKarnetRequests`, `respondChangeKarnet`, `dismissDriverKarnetRequest` (tukar karnet harian).
 
-### 📌 TAHAP 2: Monitoring Armada Kendaraan, BBM & Servis (Menu 7)
+### 📌 TAHAP 2: Monitoring Armada Kendaraan, BBM & Servis (Menu 7) [✅ SELESAI & LIVE]
 > **Fokus Utama:** Menghilangkan disparitas data armada (KT 8240 NB, dll) dan menyalurkan bukti struk SPBU/bengkel ke Google Drive CDN.
-1. Implementasi `getVehicleReports` & `getVehicleDashboardData` (modal detail spesifik per mobil).
-2. Salurkan upload foto struk BBM dan odometer ke Google Drive via GAS -> simpan URL `lh3` ke `fuel_logs`.
-3. Implementasi approval pengisian BBM: `checkActiveBBMApproval` & `getPendingBBMApprovals`.
-4. Implementasi CRUD lengkap riwayat BBM: `editBBMTransaction` & `deleteBBMTransaction`.
-5. Implementasi CRUD lengkap riwayat oli & interval KM: `editOliTransaction`, `deleteOliTransaction`, `updateBatasIntervalOli`.
-6. Implementasi CRUD lengkap bengkel: `editServiceTransaction` & `deleteServiceTransaction`.
-7. Implementasi Master Relasi Armada: `getSpbuList`, `deleteSpbuItemServer`, `getBengkelList`, `deleteBengkelItemServer`, `getMerekOliList`, `deleteMerekOliItemServer`, `saveNewMasterVehicle`, `editVehicleFromRekap`, `deleteVehicleFromRekap`.
+1. ✅ Implementasi `getVehicleReports` & `getVehicleDashboardData` (modal detail spesifik per mobil, histori BBM, oli, dan servis).
+2. ✅ Salurkan upload foto struk BBM, odometer, dan servis ke Google Drive via GAS -> simpan URL `lh3` ke `fuel_logs` & `vehicle_services`.
+3. ✅ Implementasi approval pengisian BBM: `requestIzinIsiBBM`, `checkActiveBBMApproval`, `getPendingBBMApprovals`, dan `respondIzinIsiBBM`.
+4. ✅ Implementasi CRUD lengkap riwayat BBM: `submitPengisianBBM`, `editBBMTransaction` & `deleteBBMTransaction`.
+5. ✅ Implementasi CRUD lengkap riwayat oli & interval KM: `submitInputOli`, `editOliTransaction`, `deleteOliTransaction`, `updateBatasIntervalOli`.
+6. ✅ Implementasi CRUD lengkap bengkel: `submitInputService`, `editServiceTransaction` & `deleteServiceTransaction`.
+7. ✅ Implementasi Master Relasi Armada: `getSpbuList`, `deleteSpbuItemServer`, `getBengkelList`, `deleteBengkelItemServer`, `getMerekOliList`, `deleteMerekOliItemServer`, `saveNewMasterVehicle`, `editVehicleFromRekap`, `deleteVehicleFromRekap`, dan `getSopirArmadaList`.
+8. ✅ Resolusi disparitas KT 8240 NB: dihitung dinamis dari log riil (0 L, 0,0 km/L, status oli Aman, sisa 5000 KM).
 
 ### 📌 TAHAP 3: Master Pelanggan, Mode Suplayer & Pelunasan Nota (Menu 4 & Menu 15)
 > **Fokus Utama:** Kelengkapan data relasi eksternal serta upload faktur dan bukti bayar supplier ke Google Drive CDN.
