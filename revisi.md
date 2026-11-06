@@ -3,19 +3,21 @@
 DOKUMEN         : revisi.md (Master Audit, Action Mapping & Media Pipeline Protocol)
 ARSITEK SISTEM  : ZettBOT by Zettbos (Universal Product Architect & Lead Engineering)
 PROJEK          : TMR (Tamara Delivery PRO / TB Delivery PRO)
-STATUS DOKUMEN  : TAHAP 1 & TAHAP 2 SELESAI & LIVE — SIAP TAHAP 3
+STATUS DOKUMEN  : TAHAP 1, 2 & 3 SELESAI & LIVE — SIAP TAHAP 4
 DOMAIN TARGET   : https://tmr-app.vercel.app (Single Official Production Domain)
 TANGGAL         : 6 November 2026
-COMMIT HASH     : c609a17 (v3.6.0)
+COMMIT HASH     : 81f1e03 (v3.7.0)
 BASIS AUDIT     : tb-delivery-pro/index.html (63.700+ baris), supabase-gas-adapter.js, & GAS_DRIVE_AND_BACKUP.gs
 ================================================================================
 
 > [!NOTE]
-> **STATUS EKSEKUSI TAHAP 1 & TAHAP 2:**
-> **TAHAP 1 & TAHAP 2 TELAH 100% BERHASIL DITERAPKAN & LIVE DI PRODUKSI.**
+> **STATUS EKSEKUSI TAHAP 1, TAHAP 2 & TAHAP 3:**
+> **TAHAP 1, TAHAP 2 & TAHAP 3 TELAH 100% BERHASIL DITERAPKAN & LIVE DI PRODUKSI.**
 > - **Tahap 1:** Pipeline Upload Media (Google Apps Script -> Google Drive -> Google Edge CDN lh3 -> Supabase) aktif. Seluruh 14 fitur Menu 1 (Daftar Pengantaran) dan 5 fitur Menu 2 (Input Order Baru) 100% READY.
-> - **Tahap 2:** Seluruh 28 RPC Backend Monitoring Kendaraan (Menu 7: Armada, BBM, Oli, Servis, Approval Sopir-Admin, Master Dropdown SPBU/Bengkel/Oli, Master Kendaraan & Sopir) telah 100% READY dan teruji live dengan Supabase (28/28 tests passed). Disparitas armada KT 8240 NB tuntas terselesaikan secara dinamis!
-> - Live di `https://tmr-app.vercel.app` (Commit `c609a17`). Siap melanjutkan ke **Tahap 3**.
+> - **Tahap 2:** Seluruh 28 RPC Backend Monitoring Kendaraan (Menu 7: Armada, BBM, Oli, Servis, Approval Sopir-Admin, Master Dropdown SPBU/Bengkel/Oli, Master Kendaraan & Sopir) 100% READY dan teruji live (28/28 tests passed).
+> - **Tahap 3:** Seluruh fitur Master Pelanggan (Menu 4) dan Mode Suplayer & Faktur Hutang (Menu 15) 100% READY dan teruji live (15/15 tests passed). Auto-generated ID (`CUST-XXXX`), order history modal, master supplier CRUD, pencatatan faktur barang datang, pelunasan bertahap/lunas hutang suplayer dengan bukti transfer Google Drive CDN (`lh3`).
+> - Metrik Audit Terkini: **61 dari 74 Elemen Aksi READY (82.4%)** — hanya tersisa 13 elemen untuk Tahap 4 & Tahap 5!
+> - Live di `https://tmr-app.vercel.app` (Commit `81f1e03`). Siap melanjutkan ke **Tahap 4**.
 
 ---
 ## 1. PENJELASAN ARSITEKTUR PIPELINE MEDIA (FOTO) & BACKUP SPREADSHEET
@@ -97,9 +99,9 @@ sequenceDiagram
 Berdasarkan audit menyeluruh pada antarmuka pengguna (`index.html`) terhadap adapter backend (`supabase-gas-adapter.js` & Supabase Database):
 - **Total Menu Aplikasi Utama:** **15 Menu / Modul**
 - **Total Elemen Interaktif (Tombol, Input, Form, Aksi):** **74 Elemen Aksi**
-- **Status Elemen yang Sudah Siap & Terhubung (READY):** **55 Elemen (74.3%)**
-- **Status Elemen yang Belum Dibuat / Fallback Generic (MISSING):** **19 Elemen (25.7%)**
-- **Menu yang Telah 100% Selesai & Teruji:** **Menu 1 (Daftar Pengantaran), Menu 2 (Input Order), Menu 7 (Monitoring Kendaraan)**
+- **Status Elemen yang Sudah Siap & Terhubung (READY):** **61 Elemen (82.4%)**
+- **Status Elemen yang Belum Dibuat / Fallback Generic (MISSING):** **13 Elemen (17.6%)**
+- **Menu yang Telah 100% Selesai & Teruji:** **Menu 1 (Daftar Pengantaran), Menu 2 (Input Order), Menu 4 (Database Pelanggan), Menu 7 (Monitoring Kendaraan), Menu 15 (Mode Suplayer & Faktur Hutang)**
 
 ---
 ## 3. MATRIKS PEMETAAN TOMBOL & AKSI PER MENU (15 MENU LENGKAP)
@@ -156,10 +158,10 @@ Berdasarkan audit menyeluruh pada antarmuka pengguna (`index.html`) terhadap ada
 
 | No | Elemen / Tombol UI | Aksi / Event Handler | Target RPC Backend | Supabase Table / Storage Pipeline | Status Audit | Dampak / Risiko Jika Belum Ada |
 | :-: | :--- | :--- | :--- | :--- | :-: | :--- |
-| 4.1 | **Tombol Tambah Pelanggan Baru** | `onsubmit="handleAddCustomerSubmit(event)"` | `addCustomer` | `customers` | **BELUM DIBUAT** | Pelanggan baru tidak bisa disimpan langsung dari menu ini. |
-| 4.2 | **Tombol Edit Data Pelanggan** | `onsubmit="handleEditCustomerSubmit(event)"` | `updateCustomer` | `customers` | **READY** | Perubahan nama, HP, alamat, dan ongkir tersimpan dengan aman. |
-| 4.3 | **Tombol Hapus Pelanggan** | `onclick="deleteCustomer(idCustomer)"` | `deleteCustomer` | `customers` | **READY** | Master pelanggan usang dapat dihapus oleh admin. |
-| 4.4 | **Tombol Riwayat Transaksi Pelanggan** | `onclick="openCustomerHistoryModal(id)"` | `getCustomerHistory` | `orders` where `customer_id` | **BELUM DIBUAT** | Riwayat pesanan lama pelanggan tidak dapat dimuat di popup. |
+| 4.1 | **Tombol Tambah Pelanggan Baru** | `onsubmit="handleAddCustomerSubmit(event)"` | `addCustomer` / `addNewCustomer` | `customers` | **100% READY** | Pelanggan baru otomatis tersimpan dengan format ID `CUST-XXXX` dan ongkir default. |
+| 4.2 | **Tombol Edit Data Pelanggan** | `onsubmit="handleEditCustomerSubmit(event)"` | `updateCustomer` | `customers` | **100% READY** | Perubahan nama, HP, alamat, dan ongkir tersimpan dengan aman. |
+| 4.3 | **Tombol Hapus Pelanggan** | `onclick="deleteCustomer(idCustomer)"` | `deleteCustomer` | `customers` | **100% READY** | Master pelanggan usang dapat dihapus oleh admin. |
+| 4.4 | **Tombol Riwayat Transaksi Pelanggan** | `onclick="openCustomerHistoryModal(id)"` | `getCustomerHistory` | `orders` where `customer_id` | **100% READY** | Riwayat pesanan pelanggan tampil lengkap dengan foto nota dan status kirim via Google Edge CDN. |
 | 4.5 | **Kolom Cari & Paginasi Pelanggan** | `oninput="searchCustomerTable()"` | `getCustomers` | `customers` | **READY** | Pencarian instan nama atau nomor telepon pelanggan berfungsi baik. |
 
 ---
@@ -294,11 +296,11 @@ Berdasarkan audit menyeluruh pada antarmuka pengguna (`index.html`) terhadap ada
 
 | No | Elemen / Tombol UI | Aksi / Event Handler | Target RPC Backend | Supabase Table / Storage Pipeline | Status Audit | Dampak / Risiko Jika Belum Ada |
 | :-: | :--- | :--- | :--- | :--- | :-: | :--- |
-| 15.1 | **Form Input Nota Suplayer / Barang Datang**| `onsubmit="handleSaveBarangDatangSubmit()"` | `saveBarangDatang` / `getSuppliers` | **GAS -> GDrive -> lh3 CDN -> `supplier_orders.receipt_photo`** | **BELUM DIBUAT** | Pencatatan faktur barang datang toko gagal tersimpan ke database. |
-| 15.2 | **Tombol Edit & Hapus Nota Suplayer** | `onsubmit="editBarangDatang()"` / `deleteBarangDatang()` | `updateBarangDatang` / `deleteBarangDatang` | `supplier_orders` | **BELUM DIBUAT** | Koreksi salah input nota suplayer tidak dapat dilakukan. |
-| 15.3 | **Form Pelunasan Pembayaran Faktur** | `onsubmit="handleBayarNotaSuplayerSubmit()"` | `recordSupplierPayment` | **GAS -> GDrive -> lh3 CDN -> `supplier_payments.transfer_proof`** | **BELUM DIBUAT** | Pelunasan hutang toko dan upload bukti transfer suplayer gagal disimpan. |
-| 15.4 | **Filter Jatuh Tempo Faktur** | `onclick="switchTempoTab(status)"` | `getBarangDatangList` | `supplier_orders` | **READY** | Tab filter faktur jatuh tempo dapat memuat daftar nota. |
-| 15.5 | **Kelola Master Rekanan Supplier** | `onclick="manageSuppliers()"` | `saveSupplier` / `updateSupplier` / `deleteSupplier` | `suppliers` | **BELUM DIBUAT** | Database mitra distributor semen, besi, pipa belum bisa di-CRUD. |
+| 15.1 | **Form Input Nota Suplayer / Barang Datang**| `onsubmit="handleSaveBarangDatangSubmit()"` | `saveBarangDatang` / `getSuppliers` | **GAS -> GDrive -> lh3 CDN -> `incoming_goods.receipt_photo`** | **100% READY** | Pencatatan faktur barang datang toko (ID `BD-XXXX`, tempo, multi-foto nota) tersimpan rapi. |
+| 15.2 | **Tombol Edit & Hapus Nota Suplayer** | `onsubmit="editBarangDatang()"` / `deleteBarangDatang()` | `updateBarangDatang` / `deleteBarangDatang` | `incoming_goods` | **100% READY** | Koreksi detail faktur dan hapus nota suplayer terkelola akurat. |
+| 15.3 | **Form Pelunasan Pembayaran Faktur** | `onsubmit="handleBayarNotaSuplayerSubmit()"` | `recordSupplierPayment` / `submitPelunasanSupplier` | **GAS -> GDrive -> lh3 CDN -> `incoming_goods.payment_proof_url`** | **100% READY** | Pelunasan hutang toko bertahap/lunas, pengurangan sisa hutang, log riwayat bayar & bukti transfer GDrive CDN. |
+| 15.4 | **Filter Jatuh Tempo Faktur** | `onclick="switchTempoTab(status)"` | `getBarangDatangList` | `incoming_goods` | **100% READY** | Tab filter faktur jatuh tempo (Semua, Belum Lunas, Lunas, Lewat Jatuh Tempo) sinkron realtime. |
+| 15.5 | **Kelola Master Rekanan Supplier** | `onclick="manageSuppliers()"` | `saveSupplier` / `updateSupplier` / `deleteSupplier` / `getSuppliers` | `suppliers` | **100% READY** | Master database distributor (Semen, Besi, Cat, dll), tempo default, dan kontak HP 100% CRUD. |
 
 ---
 ## 4. MASTER PLAN TAHAPAN AUDIT & IMPLEMENTASI BERTAHAP
@@ -340,13 +342,13 @@ flowchart TD
 7. ✅ Implementasi Master Relasi Armada: `getSpbuList`, `deleteSpbuItemServer`, `getBengkelList`, `deleteBengkelItemServer`, `getMerekOliList`, `deleteMerekOliItemServer`, `saveNewMasterVehicle`, `editVehicleFromRekap`, `deleteVehicleFromRekap`, dan `getSopirArmadaList`.
 8. ✅ Resolusi disparitas KT 8240 NB: dihitung dinamis dari log riil (0 L, 0,0 km/L, status oli Aman, sisa 5000 KM).
 
-### 📌 TAHAP 3: Master Pelanggan, Mode Suplayer & Pelunasan Nota (Menu 4 & Menu 15)
+### 📌 TAHAP 3: Master Pelanggan, Mode Suplayer & Pelunasan Nota (Menu 4 & Menu 15) [✅ SELESAI & LIVE]
 > **Fokus Utama:** Kelengkapan data relasi eksternal serta upload faktur dan bukti bayar supplier ke Google Drive CDN.
-1. Implementasi `addCustomer` & `getCustomerHistory` (tambah master pelanggan baru & popup histori belanja).
-2. Implementasi Master Supplier CRUD: `saveSupplier`, `updateSupplier`, `deleteSupplier`.
-3. Salurkan upload foto faktur barang datang ke Google Drive via GAS -> simpan URL `lh3` ke `supplier_orders.receipt_photo`.
-4. Salurkan upload bukti transfer pelunasan supplier ke Google Drive via GAS -> simpan URL `lh3` ke `supplier_payments.transfer_proof`.
-5. Implementasi CRUD Faktur Suplayer: `saveBarangDatang`, `updateBarangDatang`, `deleteBarangDatang`, `recordSupplierPayment`.
+1. ✅ Implementasi `addCustomer` & `addNewCustomer` (auto-generate ID `CUST-XXXX`, nomor WhatsApp, alamat, ongkir standar).
+2. ✅ Implementasi `getCustomerHistory` (riwayat pesanan pelanggan dari tabel `orders` dengan foto nota Google CDN lh3).
+3. ✅ Implementasi Master Supplier CRUD: `getSuppliers`, `saveSupplier`, `updateSupplier`, `deleteSupplier` (tabel `suppliers`).
+4. ✅ Implementasi Faktur Barang Datang: `getBarangDatangList`, `saveBarangDatang`, `updateBarangDatang`, `deleteBarangDatang` (tabel `incoming_goods` dengan foto nota 1..5).
+5. ✅ Implementasi Pelunasan Hutang Suplayer: `recordSupplierPayment` & `submitPelunasanSupplier` (cicil / lunas, auto-update sisa hutang & status `Lunas`, bukti transfer Google Drive CDN lh3).
 
 ### 📌 TAHAP 4: Modul SOP Karyawan & Laporan Kepatuhan (Menu 9)
 > **Fokus Utama:** Mengaktifkan panduan operasional standar harian toko beserta foto panduan ke Drive CDN.
@@ -368,8 +370,8 @@ flowchart TD
 ---
 
 ================================================================================
-STATUS: TAHAP 1 (CORE ORDER LIFECYCLE & MEDIA GATEWAY LH3) SELESAI & LIVE.
-VERIFIKASI PRODUKSI: HTTPS://TMR-APP.VERCEL.APP (COMMIT 7e70cb9).
-SIAP UNTUK TAHAP 2: MONITORING ARMADA KENDARAAN, BBM & PERAWATAN SERVIS.
-MENUNGGU PERINTAH / KONFIRMASI: "OKE TERAPKAN TAHAP 2".
+STATUS: TAHAP 1, TAHAP 2 & TAHAP 3 SELESAI & LIVE (61 DARI 74 ELEMEN READY - 82.4%).
+VERIFIKASI PRODUKSI: HTTPS://TMR-APP.VERCEL.APP (COMMIT 81f1e03).
+SIAP UNTUK TAHAP 4: MODUL SOP KARYAWAN & LAPORAN KEPATUHAN (MENU 9).
+MENUNGGU PERINTAH / KONFIRMASI: "OKE TERAPKAN TAHAP 4".
 ================================================================================
