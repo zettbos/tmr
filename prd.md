@@ -196,6 +196,17 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Mute Debug Console Logging:** Membungkam output default `[Adapter Call]` di konsol pada mode produksi (hanya aktif jika `window.__TB_DEBUG === true`), menghentikan penimbunan memori RAM buffer konsol.
   - **Cache-Busting Asset Versioning (`?v=6.1.0`):** Menambahkan query hash versi pada import adapter di `index.html` untuk memastikan seluruh perangkat klien langsung membuang cache lama dan warning kuning hilang seketika.
   - **Ekspansi WebSocket Realtime untuk Karnet:** Menambahkan listener event pada tabel `system_configs` untuk menangkap `KARNET_REQ_` dan `ACTIVE_KARNET_` secara real-time.
+- **v6.3.1 (6 November 2026 - Unified Multi-Approval BBM & Midnight Reset Loop Fix):**
+  - **Multi-Item Card Stack:** Modal approval BBM kini mendukung render bertumpuk (*stack view*) jika ada >1 izin BBM pending, lengkap dengan aksi per kartu [Tolak]/[Setuju], aksi massal [SETUJUI SEMUA (N)], dan tombol [Ingatkan Nanti] / [X] untuk snooze sementara hingga refresh (F5).
+  - **Bulk Backend Endpoint:** Penambahan `respondBulkIzinIsiBBM` di adapter untuk mengeksekusi update batch PostgreSQL via `.in('id', idList)`.
+  - **Midnight Reset Timezone Fix:** Penyelarasan format tanggal WITA menggunakan `Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Makassar' })` menghentikan loop pengulangan tanggal konsol `2026-11-06` vs `2026-11-07`.
+- **v6.4.0 (7 November 2026 - Laporan Ekspor, Filter Reaktif Ongkir, Waktu WITA Baku & Audit Laporan BBM):**
+  - **Laporan & Ekspor:** Sinkronisasi parameter filter (`statusPengiriman`/`status`, `statusPembayaran`/`statusBayar`, `idSopir`/`sopir`, `bulan`, `tahun`) dan field mapping ganda (`total_nilai_nota` & `total_belanja`, `biaya_ongkir` & `ongkos_kirim`, dll) sehingga data tabel dan ekspor Excel `.xls` terisi data finansial lengkap (tidak strip/0).
+  - **Laporan Ongkir (Reaktif & Bertingkat):** Pengaktifan `handleOngkirFilterChange()` instan on-change dengan filter cascading (Sopir -> Pelanggan), serta eliminasi tombol manual "Terapkan Filter".
+  - **Standarisasi Format Waktu WITA:** Perombakan `formatWitaDateTime` dan `formatIndonesianDateTime` menggunakan `Intl.DateTimeFormat` zona `Asia/Makassar` menghasilkan format seragam `DD/MM/YYYY HH:mm WITA` dan mengeliminasi bug string cacat seperti `22T21/09/2026 57:19+00 WITA`.
+  - **Audit Laporan BBM:** Sanitasi nilai default `'semua'` pada backend adapter `getVehicleReports` dan penyempurnaan plat matching `isPlatMatch`, memulihkan tampilan metrik pengisian BBM, liter, biaya, grafik konsumsi, dan ranking SPBU.
+  - **Layout Portal Armada Card:** Penataan flexbox (`min-w-0 flex-1` & `flex-wrap gap-2`) memastikan tombol "Buka Laporan" berada 100% di dalam batas kartu pada seluruh ukuran layar.
+  - **Verifikasi Produksi:** Commit `1b4ae94`, deployment Vercel `tmr-rl0u6f6r2-zettbos-projects.vercel.app`, ter-alias resmi ke `https://tmr-app.vercel.app`.
 
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT
