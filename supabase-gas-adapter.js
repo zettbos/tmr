@@ -1900,11 +1900,15 @@
         // --- PENGATURAN & EMERGENCY MESSAGES ---
         getAppConfig: async function() {
             const sb = getClient();
-            if (!sb) return {};
+            if (!sb) return { success: false, config: {} };
             const { data } = await sb.from('system_configs').select('*');
             const configObj = {};
             (data || []).forEach(row => { configObj[row.key] = row.value; });
-            return configObj;
+            return {
+                success: true,
+                config: configObj,
+                ...configObj
+            };
         },
 
         saveAppConfig: async function(key, value, description) {

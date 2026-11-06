@@ -63140,6 +63140,9 @@
 
         function applyAppConfig(cfg) {
             if (!cfg) return;
+            try {
+                localStorage.setItem('tb_tamara_app_config', JSON.stringify(cfg));
+            } catch (eLs) {}
             if (cfg.nama_perusahaan) {
                 const docTitle = document.getElementById('appDocumentTitle');
                 if (docTitle) docTitle.innerText = cfg.nama_perusahaan + ' - Sistem Pengantaran';
@@ -63789,14 +63792,30 @@
                 }
             }
 
-            // Fetch Config
+            // 1. Instant Cache Load dari LocalStorage (0 Milidetik)
+            const cachedConfig = localStorage.getItem('tb_tamara_app_config');
+            if (cachedConfig) {
+                try {
+                    const parsed = JSON.parse(cachedConfig);
+                    if (parsed && typeof parsed === 'object') {
+                        appConfig = parsed;
+                        window.appConfig = parsed;
+                        applyAppConfig(parsed);
+                    }
+                } catch (eCache) {}
+            }
+
+            // 2. Fetch Config Terbaru dari Supabase Backend
             if (isGoogleScriptAvailable) {
                 try {
                     google.script.run
                         .withSuccessHandler(function (res) {
-                            if (res && res.success && res.config) {
-                                appConfig = res.config;
-                                applyAppConfig(res.config);
+                            const cfg = (res && res.config) ? res.config : res;
+                            if (cfg && typeof cfg === 'object') {
+                                appConfig = cfg;
+                                window.appConfig = cfg;
+                                localStorage.setItem('tb_tamara_app_config', JSON.stringify(cfg));
+                                applyAppConfig(cfg);
                             }
                         })
                         .withFailureHandler(function (err) {
