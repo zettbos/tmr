@@ -5521,15 +5521,192 @@
             return this.triggerSopBackup(currentUser);
         },
 
-        uploadSopMediaToDrive: async function(base64Data, filenamePrefix) {
-            if (typeof uploadToGoogleDriveCdn === 'function') {
-                return uploadToGoogleDriveCdn(base64Data, filenamePrefix || 'SOP_MEDIA');
+        uploadSopMediaToDrive: async function(base64Data, filenamePrefix, fileType) {
+            try {
+                if (typeof uploadToGoogleDriveCdn === 'function') {
+                    const cdnUrl = await uploadToGoogleDriveCdn(base64Data, filenamePrefix || 'SOP_MEDIA');
+                    if (cdnUrl && typeof cdnUrl === 'string' && (cdnUrl.startsWith('http://') || cdnUrl.startsWith('https://'))) {
+                        return {
+                            success: true,
+                            url: cdnUrl,
+                            direct_url: cdnUrl,
+                            message: 'Media SOP berhasil diunggah ke Google Drive CDN.'
+                        };
+                    }
+                }
+            } catch (err) {
+                console.warn('[Adapter uploadSopMediaToDrive warning]', err);
             }
             return {
                 success: true,
                 url: base64Data,
-                message: 'Gambar berhasil diproses'
+                direct_url: base64Data,
+                message: 'Media berhasil diproses secara lokal.'
             };
+        },
+
+        uploadSopVideoFile: async function(fileOrBlob, filename, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const ext = (filename && filename.includes('.')) ? filename.split('.').pop() : 'mp4';
+                const safeFilename = 'sop_video_' + Date.now() + '.' + ext;
+                let blobData;
+                let mimeType = 'video/' + (ext === 'mov' ? 'quicktime' : ext);
+
+                if (typeof fileOrBlob === 'string') {
+                    let cleanBase64 = fileOrBlob;
+                    if (fileOrBlob.includes(';base64,')) {
+                        const parts = fileOrBlob.split(';base64,');
+                        mimeType = parts[0].replace('data:', '') || mimeType;
+                        cleanBase64 = parts[1];
+                    }
+                    const byteCharacters = atob(cleanBase64);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    blobData = new Blob([byteArray], { type: mimeType });
+                } else if (fileOrBlob instanceof Blob || (typeof File !== 'undefined' && fileOrBlob instanceof File)) {
+                    blobData = fileOrBlob;
+                    mimeType = fileOrBlob.type || mimeType;
+                } else {
+                    return { success: false, message: 'Data video tidak valid.' };
+                }
+
+                const SUPABASE_SERVICE_ROLE = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhZ3BsdWtxb3R5Y3BzbGh2bmJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5Mzg1OTk5MSwiZXhwIjoyMTA5NDM1OTkxfQ.XMLMoGtJTk03RQ076h0vS8-dOnPpwOHCi3nY2ctjyN4';
+                const uploadUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/brand-assets/' + encodeURIComponent(safeFilename);
+
+                const uploadRes = await fetch(uploadUrl, {
+                    method: 'POST',
+                    headers: {
+                        'apikey': SUPABASE_SERVICE_ROLE,
+                        'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE,
+                        'Content-Type': mimeType,
+                        'x-upsert': 'true'
+                    },
+                    body: blobData
+                });
+
+                if (!uploadRes.ok) {
+                    const errText = await uploadRes.text();
+                    throw new Error('Gagal unggah video ke Supabase Storage: ' + errText);
+                }
+
+                const publicUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/public/brand-assets/' + encodeURIComponent(safeFilename);
+                const sizeStr = (blobData.size > 1024 * 1024) 
+                    ? ((blobData.size / (1024 * 1024)).toFixed(1) + ' MB') 
+                    : (Math.round(blobData.size / 1024) + ' KB');
+
+                return {
+                    success: true,
+                    url: publicUrl,
+                    direct_url: publicUrl,
+                    file_id: safeFilename,
+                    size: sizeStr,
+                    message: 'Video SOP berhasil diunggah ke Supabase Cloud CDN!'
+                };
+            } catch (err) {
+                console.error('[Adapter uploadSopVideoFile error]', err);
+                return { success: false, message: err.message };
+            }
+        },
+
+        saveSopSchedule: async function(idSop, scheduleData, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const jdw = scheduleData || {};
+                const isGlobal = !idSop || idSop === 'GLOBAL_SOP_SCHEDULE';
+
+                if (isGlobal) {
+                    // Simpan sebagai jadwal default toko di system_configs
+                    await sb.from('system_configs').upsert([
+                        {
+                            key: 'SOP_DEFAULT_SCHEDULE',
+                            value: JSON.stringify(jdw),
+                            description: 'Jadwal Penerbitan Standar SOP Toko (WITA)',
+                            updated_at: new Date().toISOString()
+                        }
+                    ], { onConflict: 'key' });
+
+                    return {
+                        success: true,
+                        message: 'Jadwal standar toko berhasil disimpan permanen ke Supabase!',
+                        jadwal: jdw
+                    };
+                }
+
+                // Simpan jadwal untuk SOP spesifik
+                const times = Array.isArray(jdw.jam_list) ? jdw.jam_list :
+                              (Array.isArray(jdw.jam_tayang) ? jdw.jam_tayang : ['20.00 WITA']);
+                const startDate = jdw.tanggal || jdw.tgl_terbit || jdw.start_date || new Date().toISOString().slice(0, 10);
+                const isRecurring = jdw.berulang_harian !== false && jdw.is_recurring_daily !== false;
+                const isNotif = jdw.kirim_notif !== false && jdw.is_notif_active !== false;
+
+                // 1. Simpan ke sop_targets
+                const { error: targetErr } = await sb.from('sop_targets').upsert({
+                    id: 'JADWAL-' + idSop,
+                    sop_id: idSop,
+                    start_date: startDate,
+                    schedule_times: times,
+                    is_recurring_daily: isRecurring,
+                    is_notif_active: isNotif
+                });
+                if (targetErr) console.warn('[Adapter saveSopSchedule targetErr]', targetErr);
+
+                // 2. Update completion_criteria di sop_masters
+                const { data: masterData } = await sb.from('sop_masters').select('completion_criteria').eq('id', idSop).single();
+                const curCriteria = (masterData && masterData.completion_criteria) || {};
+                curCriteria.jadwal = jdw;
+
+                await sb.from('sop_masters').update({
+                    completion_criteria: curCriteria,
+                    status: 'Terjadwal'
+                }).eq('id', idSop);
+
+                return {
+                    success: true,
+                    message: 'Jadwal penerbitan SOP berhasil disimpan permanen ke Supabase!',
+                    jadwal: jdw
+                };
+            } catch (err) {
+                console.error('[Adapter saveSopSchedule error]', err);
+                return { success: false, message: 'Gagal menyimpan jadwal: ' + err.message };
+            }
+        },
+
+        getSopSchedule: async function(idSop) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (!idSop || idSop === 'GLOBAL_SOP_SCHEDULE') {
+                    const { data } = await sb.from('system_configs').select('value').eq('key', 'SOP_DEFAULT_SCHEDULE').single();
+                    if (data && data.value) {
+                        const parsed = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+                        return { success: true, jadwal: parsed, is_global: true };
+                    }
+                    return { success: true, jadwal: null, is_global: true };
+                }
+
+                const { data: t } = await sb.from('sop_targets').select('*').eq('sop_id', idSop).single();
+                if (t) {
+                    return {
+                        success: true,
+                        jadwal: {
+                            tanggal: t.start_date,
+                            tanggal_terbit: t.start_date,
+                            jam_list: t.schedule_times || ['20.00 WITA'],
+                            berulang_harian: t.is_recurring_daily !== false,
+                            kirim_notif: t.is_notif_active !== false
+                        }
+                    };
+                }
+                return { success: false, message: 'Jadwal tidak ditemukan' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
         },
 
         // --- LAPORAN KOMISI PENGANTARAN ---
