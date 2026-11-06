@@ -53,6 +53,24 @@ const TABLES_TO_BACKUP = [
 
 /**
  * =========================================================================
+ * FUNGSI OTORISASI IZIN GOOGLE APPS SCRIPT (JALANKAN INI 1x JIKA MUNCUL IZIN)
+ * =========================================================================
+ * Jika muncul peringatan izin (You do not have permission to call UrlFetchApp):
+ * Pilih fungsi ini di dropdown fungsi, klik "Run", lalu klik "Review permissions" -> "Allow".
+ */
+function authorizeScript() {
+  const testUrl = SUPABASE_CONFIG.URL + '/rest/v1/profiles?select=count&limit=1';
+  UrlFetchApp.fetch(testUrl, {
+    headers: { 'apikey': SUPABASE_CONFIG.SERVICE_ROLE_KEY }
+  });
+  DriveApp.getRootFolder();
+  SpreadsheetApp.getActiveSpreadsheet();
+  console.log('✅ Otorisasi Sukses! Izin UrlFetchApp (Supabase), Drive, dan Spreadsheet sudah aktif.');
+  return 'Otorisasi Sukses';
+}
+
+/**
+ * =========================================================================
  * FUNGSI TOMBOL / EKSEKUSI LANGSUNG: BACKUP SEKARANG
  * =========================================================================
  * Pilih fungsi ini di daftar fungsi Google Apps Script, lalu klik "Run".
