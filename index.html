@@ -13,6 +13,30 @@
     <link rel="icon" type="image/svg+xml" href="./icon.svg">
     <link rel="apple-touch-icon" href="./icon.svg">
     <meta name="mobile-web-app-capable" content="yes">
+    
+    <!-- CRITICAL INSTANT ZERO-FLICKER PRE-AUTH (ELIMINATES 1s LOGIN FLASH ON REFRESH) -->
+    <script>
+        (function () {
+            try {
+                var u = localStorage.getItem('tb_tamara_user');
+                if (u) {
+                    var parsed = JSON.parse(u);
+                    if (parsed && (parsed.id_user || parsed.id || parsed.username)) {
+                        document.documentElement.classList.add('user-pre-authenticated');
+                    }
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <style>
+        html.user-pre-authenticated #landingScreen {
+            display: none !important;
+        }
+        html.user-pre-authenticated #appContainer {
+            display: block !important;
+        }
+    </style>
+
     <title id="appDocumentTitle">TMR - Tamara Delivery PRO</title>
 
     <!-- Tailwind CSS CDN & FontAwesome Icons & Cropper.js & SheetJS -->
@@ -484,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.1.0"></script>
+    <script src="./supabase-gas-adapter.js?v=6.2.0"></script>
 
 </head>
 
@@ -16175,8 +16199,17 @@
     }
 
     function handleAdminPendingBBMList(res) {
-        if (res && res.success && res.data && res.data.length > 0) {
-            const pending = res.data[0];
+        let items = [];
+        if (Array.isArray(res)) {
+            items = res;
+        } else if (res && Array.isArray(res.data)) {
+            items = res.data;
+        } else if (res && res.bbm) {
+            items = Array.isArray(res.bbm) ? res.bbm : (res.bbm.data || []);
+        }
+
+        if (items.length > 0) {
+            const pending = items[0];
             if (window.lastAdminDismissedIzin !== pending.idIzin) {
                 window.currentAdminPendingIdIzin = pending.idIzin;
                 window.currentAdminPendingDriverName = pending.namaSopir;
@@ -53765,24 +53798,32 @@
 
         // REVISI TAHAP 2 GAMBAR 4: Hanya mode ALL jika checkbox Pilih Semua aktif DAN SELURUH user terpilih
         const isAllUser = (isCheckAllChecked && totalUsers > 0 && totalSelected === totalUsers);
-        s.target_type = isAllUser ? 'ALL' : 'SPECIFIC';
-        const allTargetsCombined = isAllUser 
+        let allTargetsCombined = isAllUser 
             ? ['ALL'] 
             : [...new Set([...selectedIds, ...selectedUsernames, ...selectedNames, ...specificDriverTokens])].filter(Boolean);
-        s.recipients = isAllUser ? 'ALL' : allTargetsCombined;
-        s.target_users = isAllUser ? ['ALL'] : allTargetsCombined;
 
-        if (isAllUser) {
+        // REVISI v6.2.0: Safety Fallback - Jika diterbitkan tanpa user terpilih, otomatis fallback ke ALL agar SOP tidak hilang ke ruang hampa!
+        const shouldFallbackToAll = !isAllUser && (allTargetsCombined.length === 0) && (statusTarget === 'Terbit' || s.status === 'Terjadwal' || s.status === 'Aktif');
+        const effectiveIsAll = isAllUser || shouldFallbackToAll;
+        if (shouldFallbackToAll) {
+            allTargetsCombined = ['ALL'];
+        }
+
+        s.target_type = effectiveIsAll ? 'ALL' : 'SPECIFIC';
+        s.recipients = effectiveIsAll ? 'ALL' : allTargetsCombined;
+        s.target_users = effectiveIsAll ? ['ALL'] : allTargetsCombined;
+
+        if (effectiveIsAll) {
             (s.penerima_users || []).forEach(u => { if (u) u.selected = true; });
         }
 
         s.penerima = {
-            target_type: isAllUser ? 'ALL' : 'SPECIFIC',
-            total_dipilih: isAllUser ? allAppUsers.length : selectedUsersList.length,
-            selected_users: isAllUser ? 'ALL' : allTargetsCombined,
-            selected_user_ids: isAllUser ? 'ALL' : selectedIds,
-            selected_usernames: isAllUser ? 'ALL' : selectedUsernames,
-            roles: isAllUser ? ['ALL'] : [] // JANGAN set broad roles jika spesifik user agar tidak bocor ke role-matching!
+            target_type: effectiveIsAll ? 'ALL' : 'SPECIFIC',
+            total_dipilih: effectiveIsAll ? allAppUsers.length : selectedUsersList.length,
+            selected_users: effectiveIsAll ? 'ALL' : allTargetsCombined,
+            selected_user_ids: effectiveIsAll ? 'ALL' : selectedIds,
+            selected_usernames: effectiveIsAll ? 'ALL' : selectedUsernames,
+            roles: effectiveIsAll ? ['ALL'] : [] // JANGAN set broad roles jika spesifik user agar tidak bocor ke role-matching!
         };
 
         if (!s.jadwal) s.jadwal = {};
@@ -57562,16 +57603,20 @@
             }, step.aturan || {})
         }));
 
-        // Inisialisasi penerima dan jadwal default yang bersih
+        // Inisialisasi penerima dan jadwal default yang bersih (Default ALL Karyawan agar langsung aktif)
         if (typeof getCleanActiveAppUsers === 'function') {
-            newSop.penerima_users = getCleanActiveAppUsers(false);
+            newSop.penerima_users = getCleanActiveAppUsers(true);
         }
+        newSop.target_type = 'ALL';
+        newSop.recipients = 'ALL';
+        newSop.target_users = ['ALL'];
         newSop.penerima = {
-            target_type: 'SPECIFIC',
-            selected_users: [],
-            selected_user_ids: [],
-            selected_usernames: [],
-            roles: []
+            target_type: 'ALL',
+            total_dipilih: (newSop.penerima_users || []).length,
+            selected_users: 'ALL',
+            selected_user_ids: 'ALL',
+            selected_usernames: 'ALL',
+            roles: ['ALL']
         };
         newSop.jadwal = {
             tanggal: (typeof getCurrentFormattedDateSop === 'function') ? getCurrentFormattedDateSop() : '',
@@ -63930,6 +63975,7 @@
         window.clearPersistentAuthSession = clearPersistentAuthSession;
 
         function handleLogoutDirect(reason) {
+            document.documentElement.classList.remove('user-pre-authenticated');
             currentUser = null;
             window._serverCompletedSopIdsSet = new Set();
             if (typeof closeModulSOP === 'function') closeModulSOP();

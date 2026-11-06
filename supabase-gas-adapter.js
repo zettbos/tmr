@@ -5080,9 +5080,14 @@
                     if (!stepsMap[s.sop_id]) stepsMap[s.sop_id] = [];
                     stepsMap[s.sop_id].push({
                         id_langkah: s.id,
+                        no_urut: s.step_number || (stepsMap[s.sop_id].length + 1),
+                        nama_langkah: s.step_title || s.step_name || 'Langkah',
                         judul_langkah: s.step_title || s.step_name || 'Langkah',
+                        petunjuk_user: s.user_instructions || s.instructions || '',
                         instruksi_langkah: s.user_instructions || s.instructions || '',
+                        checklist: s.checklist || s.checklist_items || [],
                         items_checklist: s.checklist || s.checklist_items || [],
+                        media_contoh: s.media_examples || [],
                         rules: s.rules || {}
                     });
                 });
@@ -5134,6 +5139,7 @@
                         tingkat_kepentingan: m.priority || 'Wajib',
                         status: st,
                         langkah: stepsMap[m.id] || [],
+                        langkah_list: stepsMap[m.id] || [],
                         created_at: cDateStr,
                         jadwal: {
                             jam_list: cleanJamList.length > 0 ? cleanJamList : ['22.32'],
@@ -5268,8 +5274,8 @@
                             id: stepId,
                             sop_id: sopId,
                             step_number: stepNum,
-                            step_title: st.judul_langkah || st.step_title || `Langkah ${stepNum}`,
-                            user_instructions: st.petunjuk_karyawan || st.user_instructions || st.instruksi_langkah || '',
+                            step_title: st.nama_langkah || st.judul_langkah || st.step_title || `Langkah ${stepNum}`,
+                            user_instructions: st.petunjuk_user || st.petunjuk_karyawan || st.user_instructions || st.instruksi_langkah || '',
                             checklist: checklist,
                             media_examples: media,
                             rules: st.aturan || st.rules || {}
@@ -5285,12 +5291,16 @@
                 if (typeof times === 'string') {
                     try { times = JSON.parse(times); } catch(e) { times = [times]; }
                 }
-                const targetRoles = Array.isArray(jdw.target_roles) ? jdw.target_roles :
+                let targetRoles = Array.isArray(jdw.target_roles) ? jdw.target_roles :
                                     (Array.isArray(sPayload.target_roles) ? sPayload.target_roles : []);
                 let targetUsers = Array.isArray(jdw.target_users) ? jdw.target_users :
                                   (Array.isArray(sPayload.target_users) ? sPayload.target_users : []);
                 if (targetUsers.length === 0 && Array.isArray(jdw.penerima_users)) {
                     targetUsers = jdw.penerima_users.map(u => u.id || u.nama || u);
+                }
+                if (targetUsers.length === 0 && targetRoles.length === 0) {
+                    targetRoles = ['ALL'];
+                    targetUsers = ['ALL'];
                 }
 
                 const { error: targetErr } = await sb.from('sop_targets').upsert({
@@ -6801,7 +6811,7 @@
                     emergency: emRes?.data || (emRes?.msg ? emRes.msg : null),
                     sop: sopRes || null,
                     karnet: karRes?.data || [],
-                    bbm: bbmRes?.data || []
+                    bbm: { success: true, data: bbmRes?.data || [] }
                 };
             } catch (err) {
                 console.warn('[Adapter getAppSyncHeartbeat Error]', err);
