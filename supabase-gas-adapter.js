@@ -354,8 +354,8 @@
                 role: userData.role || 'Staff Toko',
                 phone: userData.no_hp || userData.phone || '',
                 is_active: userData.is_active !== false,
-                shift_start: userData.jam_masuk || '',
-                shift_end: userData.jam_keluar || '',
+                shift_start: (userData.jam_masuk && userData.jam_masuk.trim()) ? userData.jam_masuk.trim() : null,
+                shift_end: (userData.jam_keluar && userData.jam_keluar.trim()) ? userData.jam_keluar.trim() : null,
                 address: userData.alamat || userData.address || ''
             };
 
@@ -962,9 +962,38 @@
             const tipeKirim = (orderData.tipe_pengiriman || orderData.status_tipe_kirim || 'Dikirim').trim();
             const isDiBawaSendiri = (tipeKirim === 'Di Bawa Sendiri');
 
+            // Validasi & resolusi customer_id agar tidak melanggar foreign key constraint orders_customer_id_fkey
+            let resolvedCustomerId = orderData.id_pelanggan ? String(orderData.id_pelanggan).trim() : null;
+            if (resolvedCustomerId) {
+                const { data: existingCust } = await sb.from('customers').select('id').eq('id', resolvedCustomerId).maybeSingle();
+                if (!existingCust) {
+                    if (orderData.nama_pelanggan && String(orderData.nama_pelanggan).trim()) {
+                        await sb.from('customers').insert({
+                            id: resolvedCustomerId,
+                            name: String(orderData.nama_pelanggan).trim(),
+                            phone: orderData.no_hp_pelanggan || '',
+                            address: orderData.alamat_lengkap || '',
+                            maps_url: orderData.link_gmaps || ''
+                        });
+                    } else {
+                        resolvedCustomerId = null;
+                    }
+                }
+            } else if (orderData.nama_pelanggan && String(orderData.nama_pelanggan).trim()) {
+                const newCustId = 'CUST-' + Date.now().toString().slice(-4);
+                const { error: insCustErr } = await sb.from('customers').insert({
+                    id: newCustId,
+                    name: String(orderData.nama_pelanggan).trim(),
+                    phone: orderData.no_hp_pelanggan || '',
+                    address: orderData.alamat_lengkap || '',
+                    maps_url: orderData.link_gmaps || ''
+                });
+                resolvedCustomerId = insCustErr ? null : newCustId;
+            }
+
             const payload = {
                 id: orderId,
-                customer_id: orderData.id_pelanggan || ('CUST-' + Date.now().toString().slice(-4)),
+                customer_id: resolvedCustomerId,
                 customer_name: orderData.nama_pelanggan || '',
                 customer_phone: orderData.no_hp_pelanggan || '',
                 customer_address: orderData.alamat_lengkap || '',
@@ -1190,7 +1219,7 @@
         },
 
         saveFotoMuatan: async function(idOrder, photoUrlsArray, currentUser) {
-            return this.addMuatanPhoto(idOrder, photoUrlsArray, currentUser);
+            return apiServices.addMuatanPhoto(idOrder, photoUrlsArray, currentUser);
         },
 
         deleteMuatanPhoto: async function(idOrder, photoIdx, currentUser) {
@@ -1408,7 +1437,7 @@
         },
 
         deleteTransferPhoto: async function(idOrder, photoIdx, currentUser) {
-            return this.deleteTransferProofPhoto(idOrder, photoIdx, currentUser);
+            return apiServices.deleteTransferProofPhoto(idOrder, photoIdx, currentUser);
         },
 
         deleteFotoUangLunas: async function(idOrder, photoIdx, currentUser) {
@@ -1628,7 +1657,7 @@
         },
 
         updateGmapsLink: async function(idOrder, urlGmaps, idUser, namaUser) {
-            return this.updateOrderGmapsLocation(idOrder, urlGmaps, { id_user: idUser, nama: namaUser, role: 'Sopir' });
+            return apiServices.updateOrderGmapsLocation(idOrder, urlGmaps, { id_user: idUser, nama: namaUser, role: 'Sopir' });
         },
 
         resolveGoogleMapsLocationUrl: async function(url) {
@@ -4051,19 +4080,55 @@
             const sb = getClient();
             if (!sb) return { success: false };
             const idTx = 'PJK-TX-' + Date.now().toString().slice(-6);
+            const taxId = payload.id_kendaraan || payload.tax_id;
+            const paymentType = (payload.jenis_pembayaran || payload.payment_type || '').toLowerCase();
+            const paymentDateStr = payload.tanggal_bayar || new Date().toISOString().slice(0, 10);
+
             const dataToInsert = {
                 id: idTx,
-                tax_id: payload.id_kendaraan || payload.tax_id,
+                tax_id: taxId,
                 plate_number: payload.no_polisi || payload.plate_number,
                 owner_name: payload.nama_pemilik || payload.owner_name,
                 payment_type: payload.jenis_pembayaran || payload.payment_type,
-                payment_date: payload.tanggal_bayar || new Date().toISOString(),
+                payment_date: paymentDateStr,
                 amount: Number(payload.nominal_biaya || payload.amount || 0),
                 notes: payload.catatan || '',
                 admin_name: payload.admin_penginput || payload.admin_name || 'Admin'
             };
             const { error } = await sb.from('tax_payment_logs').insert([dataToInsert]);
-            return { success: !error, message: error ? error.message : 'Pembayaran pajak berhasil dicatat!' };
+            if (error) return { success: false, message: error.message };
+
+            // Otomatis majukan tanggal jatuh tempo pada tabel vehicle_taxes
+            if (taxId) {
+                try {
+                    const { data: vTax } = await sb.from('vehicle_taxes').select('*').eq('id', taxId).maybeSingle();
+                    if (vTax) {
+                        const updatePayload = {};
+                        if (paymentType.includes('1 tahun') || paymentType.includes('tahunan') || paymentType.includes('stnk')) {
+                            const baseDate = vTax.tax_1yr_date ? new Date(vTax.tax_1yr_date) : new Date(paymentDateStr);
+                            baseDate.setFullYear(baseDate.getFullYear() + 1);
+                            updatePayload.tax_1yr_date = baseDate.toISOString().slice(0, 10);
+                        }
+                        if (paymentType.includes('5 tahun') || paymentType.includes('plat')) {
+                            const baseDate = vTax.tax_5yr_date ? new Date(vTax.tax_5yr_date) : new Date(paymentDateStr);
+                            baseDate.setFullYear(baseDate.getFullYear() + 5);
+                            updatePayload.tax_5yr_date = baseDate.toISOString().slice(0, 10);
+                        }
+                        if (paymentType.includes('kir')) {
+                            const baseDate = vTax.kir_date ? new Date(vTax.kir_date) : new Date(paymentDateStr);
+                            baseDate.setMonth(baseDate.getMonth() + 6);
+                            updatePayload.kir_date = baseDate.toISOString().slice(0, 10);
+                        }
+                        if (Object.keys(updatePayload).length > 0) {
+                            await sb.from('vehicle_taxes').update(updatePayload).eq('id', taxId);
+                        }
+                    }
+                } catch (eTax) {
+                    console.warn('[Pajak Auto-Advance Warning]', eTax);
+                }
+            }
+
+            return { success: true, message: 'Pembayaran pajak berhasil dicatat dan jatuh tempo diperbarui!' };
         },
 
         // --- MASTER DATA SUPPLIER & BARANG DATANG (TAHAP 3) ---
@@ -5518,7 +5583,7 @@
         },
 
         backupSopData: async function(currentUser) {
-            return this.triggerSopBackup(currentUser);
+            return apiServices.triggerSopBackup(currentUser);
         },
 
         uploadSopMediaToDrive: async function(base64Data, filenamePrefix, fileType) {
@@ -5618,7 +5683,7 @@
             if (!sb) return { success: false, message: 'Database disconnected' };
             try {
                 const jdw = scheduleData || {};
-                const isGlobal = !idSop || idSop === 'GLOBAL_SOP_SCHEDULE';
+                const isGlobal = !idSop || idSop === 'GLOBAL_SOP_SCHEDULE' || typeof idSop === 'object' || String(idSop).startsWith('{') || String(idSop).startsWith('USR-');
 
                 if (isGlobal) {
                     // Simpan sebagai jadwal default toko di system_configs
@@ -6601,6 +6666,200 @@
                 success: true,
                 message: 'Pesan darurat telah dikonfirmasi.'
             };
+        },
+
+        // --- 1. GET ACTIVE SOP BROADCAST (FUNGSI PENERBITAN SERVER KE USER) ---
+        getActiveSopBroadcast: async function(currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, sops: [] };
+
+            try {
+                const u = currentUser || {};
+                const userCode = u.id_user || u.user_code || u.id || '';
+                const userRole = (u.role || '').toLowerCase();
+                const userName = (u.nama || u.full_name || '').toLowerCase();
+                const now = new Date();
+                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                const todayStr = wita.toISOString().slice(0, 10);
+
+                // 1. Ambil SOP master yang statusnya Aktif / Terjadwal
+                const { data: masters, error: mErr } = await sb.from('sop_masters')
+                    .select('*')
+                    .in('status', ['Aktif', 'Terjadwal']);
+
+                if (mErr || !masters || masters.length === 0) {
+                    return { success: true, sops: [], today_date_key: todayStr, completed_sop_ids_today: [] };
+                }
+
+                const sopIds = masters.map(m => m.id);
+
+                // 2. Ambil steps, targets, dan logs eksekusi hari ini
+                const [stepsRes, targetsRes, logsRes] = await Promise.all([
+                    sb.from('sop_steps').select('*').in('sop_id', sopIds).order('step_number', { ascending: true }),
+                    sb.from('sop_targets').select('*').in('sop_id', sopIds),
+                    sb.from('sop_execution_logs').select('sop_id').eq('task_date', todayStr)
+                ]);
+
+                // Filter log penyelesaian user hari ini
+                const completedIdsToday = [];
+                (logsRes.data || []).forEach(l => {
+                    const lUser = (l.user_id || l.user_code || '').toLowerCase();
+                    const lName = (l.user_name || '').toLowerCase();
+                    if (lUser === userCode.toLowerCase() || (userName && lName.includes(userName))) {
+                        if (!completedIdsToday.includes(l.sop_id)) completedIdsToday.push(l.sop_id);
+                    }
+                });
+
+                const stepsMap = {};
+                (stepsRes.data || []).forEach(s => {
+                    if (!stepsMap[s.sop_id]) stepsMap[s.sop_id] = [];
+                    stepsMap[s.sop_id].push({
+                        id_langkah: s.id,
+                        judul_langkah: s.step_title || s.step_name || 'Langkah',
+                        instruksi_langkah: s.user_instructions || '',
+                        checklist: Array.isArray(s.checklist) ? s.checklist : [],
+                        media_contoh: Array.isArray(s.media_examples) ? s.media_examples : [],
+                        aturan: s.rules || {}
+                    });
+                });
+
+                const targetsMap = {};
+                (targetsRes.data || []).forEach(t => { targetsMap[t.sop_id] = t; });
+
+                // Map & filter SOP yang relevan untuk user ini
+                const relevantSops = masters.map(m => {
+                    const tgt = targetsMap[m.id] || {};
+                    return {
+                        id_sop: m.id,
+                        judul_sop: m.title,
+                        kategori: m.category,
+                        tingkat_kepentingan: m.priority || 'Wajib',
+                        status: m.status || 'Aktif',
+                        kriteria_penyelesaian: m.completion_criteria || {},
+                        langkah_langkah: stepsMap[m.id] || [],
+                        jadwal: {
+                            tanggal: tgt.start_date || todayStr,
+                            jam_tayang: tgt.schedule_times || ['20.00 WITA'],
+                            berulang_harian: tgt.is_recurring_daily !== false,
+                            kirim_notif: tgt.is_notif_active !== false,
+                            target_roles: tgt.target_roles || [],
+                            target_users: tgt.target_users || []
+                        }
+                    };
+                }).filter(s => {
+                    const tgtRoles = (s.jadwal.target_roles || []).map(r => String(r).toLowerCase());
+                    const tgtUsers = (s.jadwal.target_users || []).map(u => String(u).toLowerCase());
+                    
+                    if (tgtRoles.length === 0 && tgtUsers.length === 0) return true;
+                    if (userRole && tgtRoles.includes(userRole)) return true;
+                    if (userCode && tgtUsers.includes(userCode.toLowerCase())) return true;
+                    if (userName && tgtUsers.some(u => userName.includes(u))) return true;
+                    return false;
+                });
+
+                return {
+                    success: true,
+                    sops: relevantSops,
+                    today_date_key: todayStr,
+                    completed_sop_ids_today: completedIdsToday
+                };
+            } catch (err) {
+                console.error('[Adapter getActiveSopBroadcast Error]', err);
+                return { success: false, message: err.message, sops: [] };
+            }
+        },
+
+        // --- 2. GET APP SYNC HEARTBEAT (KONSOLIDASI POLLING 20 DETIK) ---
+        getAppSyncHeartbeat: async function(payload) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+
+            try {
+                const u = payload?.currentUser || {};
+                const r = (u.role || '').toLowerCase();
+                const isAdmin = (r.includes('admin') || r.includes('kasir') || r.includes('super'));
+
+                const promises = [
+                    apiServices.getActiveEmergencyMessage(u),
+                    apiServices.getActiveSopBroadcast(u),
+                    apiServices.getPendingKarnetRequests(u)
+                ];
+
+                if (isAdmin) {
+                    promises.push(apiServices.getPendingBBMApprovals(u));
+                }
+
+                const results = await Promise.all(promises);
+                const emRes = results[0];
+                const sopRes = results[1];
+                const karRes = results[2];
+                const bbmRes = isAdmin ? results[3] : null;
+
+                return {
+                    success: true,
+                    emergency: emRes?.data || (emRes?.msg ? emRes.msg : null),
+                    sop: sopRes || null,
+                    karnet: karRes?.data || [],
+                    bbm: bbmRes?.data || []
+                };
+            } catch (err) {
+                console.warn('[Adapter getAppSyncHeartbeat Error]', err);
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- 3. GET DRIVER LIVE MONTHLY TARGET PROGRESS ---
+        getDriverLiveMonthlyTargetProgress: async function(currentUser) {
+            const sb = getClient();
+            if (!sb || !currentUser) return { success: false };
+
+            try {
+                const now = new Date();
+                const yyyy = now.getFullYear();
+                const mm = String(now.getMonth() + 1).padStart(2, '0');
+                const monthKey = `${yyyy}-${mm}`;
+                const driverName = (currentUser.nama || currentUser.full_name || '').trim();
+
+                // 1. Ambil target bulanan dari system_configs
+                const { data: configRow } = await sb.from('system_configs')
+                    .select('value')
+                    .eq('key', 'MONTHLY_DRIVER_TARGET_' + monthKey)
+                    .maybeSingle();
+
+                let targetNominal = 300000000; // Standar default 300 juta
+                if (configRow?.value) {
+                    try {
+                        const parsed = JSON.parse(configRow.value);
+                        if (parsed[driverName]) targetNominal = Number(parsed[driverName]);
+                    } catch (e) {}
+                }
+
+                // 2. Query pesanan yang diantarkan sopir ini bulan ini
+                const { data: orders } = await sb.from('orders')
+                    .select('total_amount')
+                    .ilike('driver_name', `%${driverName}%`)
+                    .in('delivery_status', ['Selesai', 'Terkirim Sebagian'])
+                    .gte('order_date', `${monthKey}-01`);
+
+                const totalCompleted = (orders || []).reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+                const remaining = Math.max(0, targetNominal - totalCompleted);
+                const percentage = targetNominal > 0 ? Math.min(100, Math.round((totalCompleted / targetNominal) * 100)) : 0;
+
+                return {
+                    success: true,
+                    month: monthKey,
+                    driverName: driverName,
+                    target: targetNominal,
+                    totalCompleted: totalCompleted,
+                    remaining: remaining,
+                    percentage: percentage,
+                    completedCount: orders?.length || 0
+                };
+            } catch (err) {
+                console.warn('[Adapter getDriverLiveMonthlyTargetProgress Error]', err);
+                return { success: false, message: err.message };
+            }
         }
     };
 
@@ -6635,7 +6894,7 @@
                     console.log(`[Adapter Call] -> ${String(prop)}()`, args);
 
                     if (typeof apiServices[prop] === 'function') {
-                        Promise.resolve(apiServices[prop](...args))
+                        Promise.resolve(apiServices[prop].apply(apiServices, args))
                             .then(res => {
                                 if (typeof _successHandler === 'function') _successHandler(res);
                             })
@@ -6700,9 +6959,46 @@
                     return finalUrl;
                 }
             } catch (err) {
-                console.warn('[Drive CDN Warning] Gagal upload ke GAS Drive, menggunakan fallback:', err);
+                console.warn('[Drive CDN Warning] Gagal upload ke GAS Drive, beralih ke Supabase Storage CDN:', err);
             }
         }
+
+        // FAILOVER: Langsung upload ke Supabase Storage bucket 'brand-assets'
+        try {
+            const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+            const mimeMatch = base64Data.match(/^data:([^;]+);/);
+            const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+            const ext = mimeType.includes('png') ? 'png' : (mimeType.includes('webp') ? 'webp' : 'jpg');
+            
+            const byteChars = (typeof atob === 'function') ? atob(cleanBase64) : Buffer.from(cleanBase64, 'base64').toString('binary');
+            const byteNumbers = new Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) {
+                byteNumbers[i] = byteChars.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const safeName = (filenamePrefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_') + '_' + Date.now() + '.' + ext;
+
+            const uploadUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/brand-assets/' + encodeURIComponent(safeName);
+            const upRes = await fetch(uploadUrl, {
+                method: 'POST',
+                headers: {
+                    'apikey': SUPABASE_SERVICE_ROLE,
+                    'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE,
+                    'Content-Type': mimeType,
+                    'x-upsert': 'true'
+                },
+                body: byteArray
+            });
+
+            if (upRes.ok) {
+                const cdnUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/public/brand-assets/' + encodeURIComponent(safeName);
+                console.log('[Supabase Storage CDN Failover] Sukses upload:', cdnUrl);
+                return cdnUrl;
+            }
+        } catch (eStorage) {
+            console.warn('[Supabase Storage Failover Warning]', eStorage);
+        }
+
         return base64Data;
     }
     window.__uploadToGoogleDriveCdn = uploadToGoogleDriveCdn;
@@ -6780,6 +7076,21 @@
                     console.log('[Realtime TMR] Perubahan data Kendaraan/Armada:', payload.eventType);
                     if (typeof window.loadDasbordArmadaMultiMobil === 'function') {
                         try { window.loadDasbordArmadaMultiMobil(false); } catch (e) {}
+                    }
+                })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'emergency_messages' }, (payload) => {
+                    console.log('[Realtime TMR] Perubahan data Pesan Darurat:', payload.eventType);
+                    if (typeof window.checkActiveEmergencyBroadcast === 'function') {
+                        try { window.checkActiveEmergencyBroadcast(); } catch (e) {}
+                    }
+                })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_masters' }, (payload) => {
+                    console.log('[Realtime TMR] Perubahan data SOP Master:', payload.eventType);
+                    if (typeof window.checkSopBroadcastPopup === 'function') {
+                        try { window.checkSopBroadcastPopup(); } catch (e) {}
+                    }
+                    if (typeof window.fetchSopList === 'function') {
+                        try { window.fetchSopList(null, true); } catch (e) {}
                     }
                 })
                 .subscribe((status, err) => {

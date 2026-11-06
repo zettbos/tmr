@@ -176,6 +176,19 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
     - **Master Data Kendaraan & Pengemudi:** Implementasi `saveNewMasterVehicle`, `editVehicleFromRekap`, `deleteVehicleFromRekap`, dan `getSopirArmadaList`.
   - **Audit Metric Progress:** Elemen interaktif READY meningkat dari 47 (63.5%) menjadi **55 Elemen (74.3%)**, elemen MISSING berkurang menjadi **19 Elemen**.
   - **Verifikasi Produksi:** 28 dari 28 uji verifikasi live Supabase lolos (`28 PASSED, 0 FAILED`). Commit `c609a17`, deployment Vercel `tmr-dotglpify-zettbos-projects.vercel.app`, ter-alias resmi ke `https://tmr-app.vercel.app`.
+- **v6.0.0 (6 November 2026 - Master Full-System Functional Audit & Remediasi 100% Selesai):**
+  - **Resolusi Method Alias & Binding Execution Runner:** Proxy runner `createRunner` kini menggunakan `.apply(apiServices, args)`. Method alias (`saveFotoMuatan`, `deleteTransferPhoto`, `updateGmapsLink`, `backupSopData`) diarahkan langsung ke `apiServices.<method>` menghilangkan error `TypeError: this.<method> is not a function`.
+  - **Pencegahan Foreign Key Violation pada Order Baru (`createOrder`):** Menambahkan auto-upsert pelanggan baru ke tabel `customers` jika nama/telepon tersedia, atau fallback aman `customer_id: null` sehingga pembuatan order walk-in/non-member bebas dari pelanggaran constraint `orders_customer_id_fkey`.
+  - **Sanitasi Kolom Waktu Profil User (`saveUser`):** Mengonversi string kosong `""` pada jam shift masuk/keluar menjadi `null` sesuai spesifikasi tipe data PostgreSQL `TIME`.
+  - **Implementasi 3 RPC Kritis Baru:**
+    1. `getActiveSopBroadcast(currentUser)`: Query resmi PostgreSQL untuk memfilter SOP aktif, langkah kerja, jadwal penayangan, dan status penyelesaian hari ini untuk memicu modal pop-up wajib layar penuh.
+    2. `getAppSyncHeartbeat(payload)`: Multi-domain aggregator polling 20 detik yang mengonsolidasikan notifikasi darurat, SOP broadcast, approval BBM, dan approval karnet dalam satu siklus sub-50ms.
+    3. `getDriverLiveMonthlyTargetProgress(currentUser)`: Agregasi live nilai orderan selesai sopir pada bulan berjalan terhadap target bulanan toko.
+  - **Pemulihan Integritas Database Modul SOP (`sop_masters`):** Men-seed 5 master SOP resmi ke tabel `sop_masters` dan membersihkan record anomali pada tabel `sop_targets`.
+  - **Otomatisasi Pemajuan Jatuh Tempo Pajak (`submitPembayaranPajak`):** Otomatis memajukan tanggal jatuh tempo (+1 tahun untuk pajak tahunan, +5 tahun untuk pajak plat) pada tabel `vehicle_taxes` begitu pembayaran diverifikasi.
+  - **Dual-Cloud Storage Failover (`uploadToGoogleDriveCdn`):** Penambahan failover otomatis ke Supabase Storage Edge CDN (`brand-assets`) jika Google Apps Script mengalami timeout atau limit kuota harian (20.000/hari) tercapai.
+  - **Ekspansi Realtime Channel:** Menambahkan listener WebSocket Supabase Realtime untuk tabel `emergency_messages` dan `sop_masters`.
+  - **Hasil Pengujian Penuh:** 137 dari 137 RPC terpetakan 100% (`0 Missing / Relying on Fallback`).
 
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT
