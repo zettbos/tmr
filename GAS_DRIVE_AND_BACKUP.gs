@@ -1,14 +1,23 @@
 /**
- * GOOGLE APPS SCRIPT ENGINE: DRIVE PHOTO CDN (lh3) & MIDNIGHT SPREADSHEET BACKUP
+ * GOOGLE APPS SCRIPT ENGINE: DRIVE PHOTO CDN (lh3) & SPREADSHEET COLD BACKUP
  * SISTEM: TMR (Tamara Delivery PRO / TB Delivery PRO)
  * Arsitek: ZettBOT by Zettbos
  * 
- * FUNGSI:
- * 1. doPost(): Menerima upload foto dari aplikasi TMR, menyimpannya di Google Drive,
- *    dan menghasilkan direct CDN URL berkecepatan tinggi: https://lh3.googleusercontent.com/d/{ID}=s1200
- * 2. backupSupabaseToGoogleSheets(): Menarik dump snapshot seluruh tabel dari Supabase PostgreSQL
- *    dan menyimpannya ke Google Spreadsheet fisik setiap jam 12:00 malam (00:00).
- * 3. installMidnightBackupTrigger(): Memasang trigger cron jam 00:00 otomatis.
+ * FUNGSI UTAMA:
+ * 1. doPost(e):
+ *    - Upload foto dokumentasi/surat jalan ke Drive -> Return lh3 CDN URL:
+ *      https://lh3.googleusercontent.com/d/{ID}=s1200
+ *    - Menerima webhook trigger 'backupSekarang' / 'triggerBackup'
+ * 2. doGet(e):
+ *    - Health check status
+ *    - Eksekusi instan backup via browser URL (?action=backup)
+ * 3. backupSekarang() / backupNow():
+ *    - Fungsi mandiri untuk "Backup Sekarang" (klik Run di script editor)
+ * 4. backupSupabaseToGoogleSheets():
+ *    - Menarik dump snapshot seluruh tabel dari Supabase PostgreSQL
+ *      dan menuliskan Header + Data ke Google Spreadsheet fisik.
+ * 5. installMidnightBackupTrigger():
+ *    - Memasang trigger otomatis harian jam 00:00 WITA.
  */
 
 // Kredensial Supabase untuk Script Properties / Hardcoded
@@ -16,6 +25,108 @@ const SUPABASE_CONFIG = {
   URL: 'https://eagplukqotycpslhvnbp.supabase.co',
   SERVICE_ROLE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhZ3BsdWtxb3R5Y3BzbGh2bmJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5Mzg1OTk5MSwiZXhwIjoyMTA5NDM1OTkxfQ.XMLMoGtJTk03RQ076h0vS8-dOnPpwOHCi3nY2ctjyN4'
 };
+
+// Daftar seluruh tabel di Supabase yang dicadangkan ke Google Sheets
+const TABLES_TO_BACKUP = [
+  'profiles',
+  'customers',
+  'orders',
+  'orders_archive',
+  'vehicles',
+  'fuel_approvals',
+  'fuel_logs',
+  'oil_change_logs',
+  'vehicle_services',
+  'vehicle_taxes',
+  'tax_payment_logs',
+  'tax_reminder_settings',
+  'suppliers',
+  'incoming_goods',
+  'activity_logs',
+  'sop_masters',
+  'sop_steps',
+  'sop_targets',
+  'sop_execution_logs',
+  'emergency_messages',
+  'system_configs'
+];
+
+/**
+ * =========================================================================
+ * FUNGSI TOMBOL / EKSEKUSI LANGSUNG: BACKUP SEKARANG
+ * =========================================================================
+ * Pilih fungsi ini di daftar fungsi Google Apps Script, lalu klik "Run".
+ */
+function backupSekarang() {
+  console.log('🚀 [START] Memulai Eksekusi Backup Sekarang (Supabase -> Google Sheets)...');
+  const result = backupSupabaseToGoogleSheets();
+  console.log('✅ [FINISH] Rangkuman Hasil Backup:');
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function backupNow() {
+  return backupSekarang();
+}
+
+/**
+ * Mendapatkan Google Spreadsheet target secara aman:
+ * 1. Coba ambil spreadsheet aktif (jika script bound)
+ * 2. Coba buka dari Script Properties (BACKUP_SPREADSHEET_ID)
+ * 3. Coba cari file 'TB_TAMARA_BACKUP_DATABASE' di Google Drive
+ * 4. Buat spreadsheet baru otomatis jika belum ada
+ */
+function getTargetSpreadsheet() {
+  try {
+    const active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active;
+  } catch (e) {}
+
+  const props = PropertiesService.getScriptProperties();
+  const savedId = props.getProperty('BACKUP_SPREADSHEET_ID');
+  if (savedId) {
+    try {
+      return SpreadsheetApp.openById(savedId);
+    } catch (e) {
+      console.warn('Gagal membuka spreadsheet dari savedId:', e);
+    }
+  }
+
+  try {
+    const files = DriveApp.getFilesByName('TB_TAMARA_BACKUP_DATABASE');
+    if (files.hasNext()) {
+      const file = files.next();
+      props.setProperty('BACKUP_SPREADSHEET_ID', file.getId());
+      return SpreadsheetApp.openById(file.getId());
+    }
+  } catch (e) {}
+
+  const newSs = SpreadsheetApp.create('TB_TAMARA_BACKUP_DATABASE');
+  props.setProperty('BACKUP_SPREADSHEET_ID', newSs.getId());
+  return newSs;
+}
+
+/**
+ * Endpoint GET untuk Health Check dan Pemicu Backup Cepat via Browser
+ */
+function doGet(e) {
+  const action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
+
+  // Trigger Backup langsung dari Browser URL: ?action=backup
+  if (action === 'backup' || action === 'backupSekarang' || action === 'triggerBackup') {
+    const result = backupSupabaseToGoogleSheets();
+    return ContentService.createTextOutput(JSON.stringify(result, null, 2))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: 'online',
+    system: 'TB Delivery PRO (TMR) - Storage & Backup Microservice',
+    appUrl: 'https://tmr-app.vercel.app',
+    instantBackupUrl: ScriptApp.getService().getUrl() + '?action=backup',
+    timestamp: new Date().toISOString()
+  }, null, 2)).setMimeType(ContentService.MimeType.JSON);
+}
 
 /**
  * Endpoint POST untuk upload file dan panggilan API pendukung
@@ -37,15 +148,21 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // AKSI 2: Manual Trigger Backup dari Luar
-    if (action === 'triggerBackup') {
+    // AKSI 2: Trigger Backup Sekarang dari Web Client / API
+    if (action === 'triggerBackup' || action === 'backupSekarang' || action === 'backupDatabaseToDrive') {
       const backupRes = backupSupabaseToGoogleSheets();
       return ContentService.createTextOutput(JSON.stringify(backupRes)).setMimeType(ContentService.MimeType.JSON);
     }
 
-    return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Action tidak dikenal: ' + action })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: 'Action tidak dikenal: ' + action
+    })).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.toString() })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -108,22 +225,16 @@ function saveFileToDriveAndGetLh3Url(base64Data, filenamePrefix) {
 }
 
 /**
- * SINKRONISASI COLD BACKUP SPREADSHEET (JAM 12 MALAM)
- * Menarik seluruh data terbaru dari Supabase dan menuliskannya ke Sheet Backup
+ * ENGINE UTAMA SINKRONISASI COLD BACKUP SPREADSHEET
+ * Menarik seluruh data terbaru dari 21 tabel Supabase dan menuliskannya ke Sheet Backup
  */
 function backupSupabaseToGoogleSheets() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getTargetSpreadsheet();
   const startTime = new Date();
-  const tablesToBackup = [
-    'profiles', 'customers', 'orders', 'orders_archive', 'vehicles',
-    'fuel_approvals', 'fuel_logs', 'oil_change_logs', 'vehicle_services',
-    'vehicle_taxes', 'tax_payment_logs', 'tax_reminder_settings',
-    'suppliers', 'incoming_goods', 'activity_logs', 'sop_masters', 'sop_steps'
-  ];
-
   let summary = [];
+  let totalRows = 0;
 
-  tablesToBackup.forEach(tableName => {
+  TABLES_TO_BACKUP.forEach(function(tableName) {
     try {
       const url = SUPABASE_CONFIG.URL + '/rest/v1/' + tableName + '?select=*&limit=10000';
       const options = {
@@ -138,23 +249,23 @@ function backupSupabaseToGoogleSheets() {
       const response = UrlFetchApp.fetch(url, options);
       if (response.getResponseCode() === 200) {
         const rows = JSON.parse(response.getContentText());
-        if (rows && rows.length > 0) {
-          // Nama sheet tanpa underscore (Sesuai SOP ZettBOT)
-          const sheetName = 'Backup' + tableName.charAt(0).toUpperCase() + tableName.slice(1);
-          let sheet = ss.getSheetByName(sheetName);
-          if (!sheet) {
-            sheet = ss.insertSheet(sheetName);
-          } else {
-            sheet.clearContents();
-          }
+        const sheetName = 'Backup_' + tableName;
+        let sheet = ss.getSheetByName(sheetName);
 
-          // Headers
+        if (!sheet) {
+          sheet = ss.insertSheet(sheetName);
+        } else {
+          sheet.clearContents();
+        }
+
+        if (rows && rows.length > 0) {
+          // 1. Ekstrak Header Kolom
           const headers = Object.keys(rows[0]);
           const matrix = [headers];
 
-          // Data rows
-          rows.forEach(r => {
-            const rowVals = headers.map(h => {
+          // 2. Baris Data
+          rows.forEach(function(r) {
+            const rowVals = headers.map(function(h) {
               const val = r[h];
               if (val === null || val === undefined) return '';
               if (typeof val === 'object') return JSON.stringify(val);
@@ -163,35 +274,68 @@ function backupSupabaseToGoogleSheets() {
             matrix.push(rowVals);
           });
 
+          // Tulis seluruh matrix data sekaligus (batch write)
           sheet.getRange(1, 1, matrix.length, headers.length).setValues(matrix);
-          sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e2e8f0');
-          SpreadsheetApp.flush();
+
+          // Format Header: Tebal, Background Slate, Freeze Row 1
+          sheet.getRange(1, 1, 1, headers.length)
+            .setFontWeight('bold')
+            .setBackground('#e2e8f0')
+            .setFontColor('#0f172a');
+          try {
+            sheet.setFrozenRows(1);
+          } catch (eFreeze) {}
+
+          totalRows += rows.length;
           summary.push(tableName + ': ' + rows.length + ' baris');
+        } else {
+          // Jika tabel kosong, tetap buat tab dan beri keterangan
+          sheet.getRange(1, 1).setValue('(Tabel ' + tableName + ' kosong di database)').setFontStyle('italic');
+          summary.push(tableName + ': 0 baris (kosong)');
         }
+      } else {
+        summary.push(tableName + ': GAGAL HTTP ' + response.getResponseCode());
       }
     } catch (e) {
-      console.warn('Backup error on ' + tableName + ':', e);
-      summary.push(tableName + ': GAGAL (' + e.message + ')');
+      console.warn('Backup error pada ' + tableName + ':', e);
+      summary.push(tableName + ': ERROR (' + e.message + ')');
     }
   });
 
-  // Catat ke tab SystemBackupLogs
-  let logSheet = ss.getSheetByName('SystemBackupLogs');
-  if (!logSheet) {
-    logSheet = ss.insertSheet('SystemBackupLogs');
-    logSheet.appendRow(['Timestamp', 'Status', 'Durasi (Detik)', 'Rangkuman']);
-    logSheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#f1f5f9');
+  // Catat riwayat eksekusi ke tab SystemBackupLogs
+  try {
+    let logSheet = ss.getSheetByName('SystemBackupLogs');
+    if (!logSheet) {
+      logSheet = ss.insertSheet('SystemBackupLogs');
+      logSheet.appendRow(['Timestamp (WITA)', 'Status', 'Total Baris', 'Durasi (Detik)', 'Rangkuman']);
+      logSheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#f1f5f9').setFontColor('#1e293b');
+      try { logSheet.setFrozenRows(1); } catch (e) {}
+    }
+    const durationSec = Math.round((new Date() - startTime) / 1000);
+    logSheet.appendRow([
+      Utilities.formatDate(new Date(), 'Asia/Makassar', 'yyyy-MM-dd HH:mm:ss'),
+      'SUCCESS',
+      totalRows,
+      durationSec,
+      summary.join(' | ')
+    ]);
+  } catch (eLog) {
+    console.warn('Gagal mencatat log backup:', eLog);
   }
-  const durationSec = Math.round((new Date() - startTime) / 1000);
-  logSheet.appendRow([
-    Utilities.formatDate(new Date(), 'Asia/Makassar', 'yyyy-MM-dd HH:mm:ss'),
-    'SUCCESS',
-    durationSec,
-    summary.join(', ')
-  ]);
-  SpreadsheetApp.flush();
 
-  return { success: true, timestamp: new Date().toISOString(), durationSec: durationSec, summary: summary };
+  SpreadsheetApp.flush();
+  const durationSec = Math.round((new Date() - startTime) / 1000);
+
+  return {
+    success: true,
+    action: 'backupSekarang',
+    spreadsheetUrl: ss.getUrl(),
+    spreadsheetName: ss.getName(),
+    totalRows: totalRows,
+    durationSec: durationSec,
+    timestampWita: Utilities.formatDate(new Date(), 'Asia/Makassar', 'yyyy-MM-dd HH:mm:ss'),
+    summary: summary
+  };
 }
 
 /**
@@ -201,8 +345,8 @@ function backupSupabaseToGoogleSheets() {
 function installMidnightBackupTrigger() {
   // Hapus trigger lama jika ada
   const triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(t => {
-    if (t.getHandlerFunction() === 'backupSupabaseToGoogleSheets') {
+  triggers.forEach(function(t) {
+    if (t.getHandlerFunction() === 'backupSupabaseToGoogleSheets' || t.getHandlerFunction() === 'backupSekarang') {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -214,5 +358,5 @@ function installMidnightBackupTrigger() {
     .atHour(0)
     .create();
 
-  console.log('✅ Trigger Midnight Backup Berhasil Dipasang: Eksekusi otomatis setiap jam 00:00.');
+  console.log('✅ Trigger Midnight Backup Berhasil Dipasang: Eksekusi otomatis setiap jam 00:00 WITA.');
 }
