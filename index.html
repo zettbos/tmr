@@ -17243,6 +17243,7 @@
         if (!url || typeof url !== 'string') return '';
         const cleanUrl = url.trim();
         if (cleanUrl.startsWith('data:image')) return cleanUrl;
+        if (cleanUrl.includes('lh3.googleusercontent.com')) return cleanUrl;
 
         // Ekstrak file ID Google Drive
         const driveMatch = cleanUrl.match(/\/file\/d\/([-\w]{25,})/i) ||
@@ -17250,7 +17251,7 @@
                            cleanUrl.match(/\/d\/([-\w]{25,})/i);
 
         if (driveMatch && driveMatch[1]) {
-            return 'https://drive.google.com/thumbnail?id=' + driveMatch[1] + '&sz=w1200';
+            return 'https://lh3.googleusercontent.com/d/' + driveMatch[1] + '=s1200';
         }
         return cleanUrl;
     }

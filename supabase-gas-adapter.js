@@ -1120,11 +1120,566 @@
             return { success: true, message: `Order ${idOrder} berhasil diverifikasi checker!` };
         },
 
-        saveFotoMuatan: async function(idOrder, base64Array) {
+        // ==========================================
+        // TAHAP 1: CORE ORDER LIFECYCLE & MEDIA (lh3)
+        // ==========================================
+
+        addMuatanPhoto: async function(idOrder, base64PhotoArray, currentUser) {
             const sb = getClient();
-            if (!sb || !base64Array || !base64Array.length) return { success: false };
-            const { error } = await sb.from('orders').update({ additional_nota_url: base64Array[0] }).eq('id', idOrder);
-            return { success: !error, message: error ? error.message : 'Foto muatan berhasil disimpan!' };
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                const rawList = Array.isArray(base64PhotoArray) ? base64PhotoArray : [base64PhotoArray];
+                const uploaded = await uploadMediaPipeline(rawList, 'MUATAN_' + idOrder);
+                if (uploaded.length === 0) return { success: false, message: 'Tidak ada foto yang berhasil diunggah' };
+
+                const { data: order, error } = await sb.from('orders').select('notes, cargo_photo_url').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let currentNotes = order.notes || '';
+                let existing = [];
+                const match = currentNotes.match(/\[FOTO_MUATAN:([^\]]+)\]/i);
+                if (match && match[1]) {
+                    existing = match[1].split('|||').map(s => s.trim()).filter(Boolean);
+                } else if (order.cargo_photo_url) {
+                    existing = order.cargo_photo_url.split('|||').map(s => s.trim()).filter(Boolean);
+                }
+
+                const combined = Array.from(new Set([...existing, ...uploaded])).slice(0, 5);
+                const combinedTag = '[FOTO_MUATAN:' + combined.join('|||') + ']';
+                if (match) {
+                    currentNotes = currentNotes.replace(/\[FOTO_MUATAN:[^\]]+\]/i, combinedTag);
+                } else {
+                    currentNotes = (currentNotes ? currentNotes + ' ' : '') + combinedTag;
+                }
+
+                await sb.from('orders').update({
+                    notes: currentNotes,
+                    cargo_photo_url: combined.join('|||'),
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'ADD_MUATAN_PHOTO', `Menambahkan foto bukti muatan untuk order ${idOrder}`);
+                }
+
+                return { success: true, message: 'Berhasil menambahkan foto bukti muatan!', photos: combined };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        saveFotoMuatan: async function(idOrder, photoUrlsArray, currentUser) {
+            return this.addMuatanPhoto(idOrder, photoUrlsArray, currentUser);
+        },
+
+        deleteMuatanPhoto: async function(idOrder, photoIdx, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser || (currentUser.role !== 'Super Admin' && currentUser.role !== 'Owner')) {
+                    return { success: false, message: 'AKSES DITOLAK: Hanya Admin Pusat yang berhak menghapus foto bukti muatan!' };
+                }
+
+                const { data: order, error } = await sb.from('orders').select('notes, cargo_photo_url').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let currentNotes = order.notes || '';
+                let existing = [];
+                const match = currentNotes.match(/\[FOTO_MUATAN:([^\]]+)\]/i);
+                if (match && match[1]) {
+                    existing = match[1].split('|||').map(s => s.trim()).filter(Boolean);
+                } else if (order.cargo_photo_url) {
+                    existing = order.cargo_photo_url.split('|||').map(s => s.trim()).filter(Boolean);
+                }
+
+                const idx = parseInt(photoIdx, 10) - 1;
+                if (idx >= 0 && idx < existing.length) {
+                    existing.splice(idx, 1);
+                }
+
+                const newTag = existing.length > 0 ? ('[FOTO_MUATAN:' + existing.join('|||') + ']') : '';
+                if (match) {
+                    currentNotes = currentNotes.replace(/\[FOTO_MUATAN:[^\]]+\]/i, newTag).trim();
+                }
+
+                await sb.from('orders').update({
+                    notes: currentNotes,
+                    cargo_photo_url: existing.length > 0 ? existing.join('|||') : null,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'DELETE_MUATAN_PHOTO', `Menghapus foto muatan #${photoIdx} pada order ${idOrder}`);
+                }
+
+                return { success: true, message: 'Foto bukti muatan berhasil dihapus!' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteFotoMuatan: async function(idOrder, targetPhotoUrl, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser || (currentUser.role !== 'Super Admin' && currentUser.role !== 'Owner')) {
+                    return { success: false, message: 'AKSES DITOLAK: Hanya Admin Pusat yang berhak menghapus foto bukti muatan!' };
+                }
+
+                const { data: order, error } = await sb.from('orders').select('notes, cargo_photo_url').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let currentNotes = order.notes || '';
+                let existing = [];
+                const match = currentNotes.match(/\[FOTO_MUATAN:([^\]]+)\]/i);
+                if (match && match[1]) {
+                    existing = match[1].split('|||').map(s => s.trim()).filter(Boolean);
+                } else if (order.cargo_photo_url) {
+                    existing = order.cargo_photo_url.split('|||').map(s => s.trim()).filter(Boolean);
+                }
+
+                existing = existing.filter(p => p !== targetPhotoUrl);
+                const newTag = existing.length > 0 ? ('[FOTO_MUATAN:' + existing.join('|||') + ']') : '';
+                if (match) {
+                    currentNotes = currentNotes.replace(/\[FOTO_MUATAN:[^\]]+\]/i, newTag).trim();
+                }
+
+                await sb.from('orders').update({
+                    notes: currentNotes,
+                    cargo_photo_url: existing.length > 0 ? existing.join('|||') : null,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'DELETE_MUATAN_PHOTO', `Menghapus foto muatan pada order ${idOrder}`);
+                }
+
+                return { success: true, message: 'Foto bukti muatan berhasil dihapus!' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        addDriverPhoto: async function(idOrder, base64PhotoArray, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                const rawList = Array.isArray(base64PhotoArray) ? base64PhotoArray : [base64PhotoArray];
+                const uploaded = await uploadMediaPipeline(rawList, 'DRIVER_' + idOrder);
+                if (uploaded.length === 0) return { success: false, message: 'Tidak ada foto yang berhasil diunggah' };
+
+                const { data: order, error } = await sb.from('orders').select('proof_url_1, proof_url_2, proof_url_3, proof_url_4, proof_url_5').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                const updates = { updated_at: new Date().toISOString() };
+                let inserted = 0;
+                for (let i = 1; i <= 5; i++) {
+                    if (inserted >= uploaded.length) break;
+                    const key = 'proof_url_' + i;
+                    if (!order[key]) {
+                        updates[key] = uploaded[inserted];
+                        inserted++;
+                    }
+                }
+                if (inserted === 0 && uploaded.length > 0) {
+                    updates['proof_url_5'] = uploaded[0];
+                }
+
+                await sb.from('orders').update(updates).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'ADD_DRIVER_PHOTO', `Menambahkan foto pengiriman sopir untuk order ${idOrder}`);
+                }
+
+                return { success: true, message: 'Berhasil menambahkan foto pengiriman sopir!' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteDriverProofPhoto: async function(idOrder, photoIdx, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser || (currentUser.role !== 'Super Admin' && currentUser.role !== 'Owner')) {
+                    return { success: false, message: 'AKSES DITOLAK: Hanya Admin Pusat yang berhak menghapus foto bukti sopir!' };
+                }
+
+                const idx = parseInt(photoIdx, 10);
+                if (idx < 1 || idx > 5) return { success: false, message: 'Indeks foto tidak valid (1-5)' };
+
+                const updates = {
+                    ['proof_url_' + idx]: null,
+                    updated_at: new Date().toISOString()
+                };
+
+                await sb.from('orders').update(updates).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'DELETE_PROOF_PHOTO', `Menghapus foto bukti #${photoIdx} pada order ${idOrder}`);
+                }
+
+                return { success: true, message: `Foto bukti pengiriman #${photoIdx} berhasil dihapus.` };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        addTransferPhoto: async function(idOrder, base64PhotoArray, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                const rawList = Array.isArray(base64PhotoArray) ? base64PhotoArray : [base64PhotoArray];
+                const uploaded = await uploadMediaPipeline(rawList, 'TRANSFER_' + idOrder);
+                if (uploaded.length === 0) return { success: false, message: 'Tidak ada foto yang berhasil diunggah' };
+
+                const { data: order, error } = await sb.from('orders').select('transfer_proof_url').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let existing = (order.transfer_proof_url || '').split(',').map(s => s.trim()).filter(Boolean);
+                const combined = Array.from(new Set([...existing, ...uploaded]));
+
+                await sb.from('orders').update({
+                    transfer_proof_url: combined.join(', '),
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'ADD_TRANSFER_PHOTO', `Menambahkan foto bukti transfer untuk order ${idOrder}`);
+                }
+
+                return { success: true, message: 'Berhasil menambahkan foto bukti transfer!' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteTransferProofPhoto: async function(idOrder, photoIdx, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser || (currentUser.role !== 'Super Admin' && currentUser.role !== 'Owner')) {
+                    return { success: false, message: 'AKSES DITOLAK: Anda tidak berhak menghapus foto bukti transfer!' };
+                }
+
+                const { data: order, error } = await sb.from('orders').select('transfer_proof_url').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let urlList = (order.transfer_proof_url || '').split(',').map(s => s.trim()).filter(Boolean);
+                const idx = parseInt(photoIdx, 10) - 1;
+                if (idx >= 0 && idx < urlList.length) {
+                    urlList.splice(idx, 1);
+                }
+
+                await sb.from('orders').update({
+                    transfer_proof_url: urlList.length > 0 ? urlList.join(', ') : null,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'DELETE_TRANSFER_PHOTO', `Menghapus foto bukti transfer #${photoIdx} pada order ${idOrder}`);
+                }
+
+                return { success: true, message: `Foto bukti transfer #${photoIdx} berhasil dihapus.` };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteTransferPhoto: async function(idOrder, photoIdx, currentUser) {
+            return this.deleteTransferProofPhoto(idOrder, photoIdx, currentUser);
+        },
+
+        deleteFotoUangLunas: async function(idOrder, photoIdx, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser || (currentUser.role !== 'Super Admin' && currentUser.role !== 'Owner' && currentUser.role !== 'Admin')) {
+                    return { success: false, message: 'AKSES DITOLAK: Hanya Admin / Super Admin yang berhak menghapus foto uang lunas!' };
+                }
+
+                const { data: order, error } = await sb.from('orders').select('cash_proof_url').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let urlList = (order.cash_proof_url || '').split(',').map(s => s.trim()).filter(Boolean);
+                const idx = parseInt(photoIdx, 10) - 1;
+                if (idx >= 0 && idx < urlList.length) {
+                    urlList.splice(idx, 1);
+                }
+
+                await sb.from('orders').update({
+                    cash_proof_url: urlList.length > 0 ? urlList.join(', ') : null,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'DELETE_FOTO_UANG_LUNAS', `Menghapus foto uang lunas #${photoIdx} pada order ${idOrder}`);
+                }
+
+                return { success: true, message: `Foto uang lunas #${photoIdx} berhasil dihapus.` };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        addAdditionalOrder: async function(idOrder, catatanTambahan, base64NotaArray, nominalTambahan, statusBayarTambahan, nominalSisaTambahan, currentUser, tipeKirimTambahan) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                const rawList = Array.isArray(base64NotaArray) ? base64NotaArray : (base64NotaArray ? [base64NotaArray] : []);
+                const uploaded = await uploadMediaPipeline(rawList, 'NOTA_TAMBAHAN_' + idOrder);
+
+                const { data: order, error } = await sb.from('orders').select('*').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let currentNotaUrl = order.nota_photo_url || '';
+                let currentTambahanUrl = order.additional_nota_url || '';
+                let currentNotes = order.notes || '';
+
+                if (uploaded.length > 0) {
+                    currentTambahanUrl = currentTambahanUrl ? (currentTambahanUrl + ', ' + uploaded.join(', ')) : uploaded.join(', ');
+                    currentNotaUrl = currentNotaUrl ? (currentNotaUrl + ', ' + uploaded.join(', ')) : uploaded.join(', ');
+                }
+
+                const isDiBawaSendiri = (tipeKirimTambahan === 'Di Bawa Sendiri');
+                const addNominal = isDiBawaSendiri ? 0 : (parseInt(String(nominalTambahan || '').replace(/[^0-9]/g, ''), 10) || 0);
+                const isLunasTambahan = (statusBayarTambahan === 'Lunas');
+                const addSisaNominal = isLunasTambahan ? 0 : (parseInt(String(nominalSisaTambahan || nominalTambahan || '').replace(/[^0-9]/g, ''), 10) || 0);
+
+                let prevTotalTambahan = 0;
+                const mTot = currentNotes.match(/\[TOTAL_TAMBAHAN_TERKIRIM:\s*(\d+)\]/i);
+                if (mTot && mTot[1]) {
+                    prevTotalTambahan = parseInt(mTot[1], 10) || 0;
+                } else {
+                    const reTot = /\[ORDERAN TAMBAHAN\s*\(Nilai:\s*Rp\s*([0-9.,]+)/gi;
+                    let m;
+                    while ((m = reTot.exec(currentNotes)) !== null) {
+                        if (m[1]) prevTotalTambahan += parseInt(m[1].replace(/[^0-9]/g, ''), 10) || 0;
+                    }
+                }
+                const newTotalTambahan = prevTotalTambahan + addNominal;
+
+                let prevTambahanBelum = 0;
+                const mBelum = currentNotes.match(/\[TAMBAHAN_BELUM_BAYAR:\s*(\d+)\]/i);
+                if (mBelum && mBelum[1]) {
+                    prevTambahanBelum = parseInt(mBelum[1], 10) || 0;
+                }
+                const newTambahanBelum = prevTambahanBelum + addSisaNominal;
+
+                currentNotes = currentNotes
+                    .replace(/\[TOTAL_TAMBAHAN_TERKIRIM:\s*\d+\]/gi, '')
+                    .replace(/\[TAMBAHAN_BELUM_BAYAR:\s*\d+\]/gi, '')
+                    .trim();
+
+                const payTag = isLunasTambahan ? 'LUNAS' : ('Sisa Tagihan: Rp ' + addSisaNominal.toLocaleString('id-ID'));
+                let newEntry = '';
+                if (isDiBawaSendiri) {
+                    newEntry = `[ORDERAN TAMBAHAN (Di Bawa Sendiri | ${payTag})]` + (catatanTambahan && catatanTambahan.trim() ? (': ' + catatanTambahan.trim()) : '');
+                } else {
+                    newEntry = `[ORDERAN TAMBAHAN (Nilai: Rp ${addNominal.toLocaleString('id-ID')} | ${payTag})]` + (catatanTambahan && catatanTambahan.trim() ? (': ' + catatanTambahan.trim()) : '');
+                }
+
+                currentNotes = (currentNotes ? currentNotes + ' | ' : '') + newEntry + ` [TOTAL_TAMBAHAN_TERKIRIM:${newTotalTambahan}]`;
+                if (newTambahanBelum > 0) {
+                    currentNotes += ` [TAMBAHAN_BELUM_BAYAR:${newTambahanBelum}]`;
+                }
+
+                await sb.from('orders').update({
+                    notes: currentNotes,
+                    additional_nota_url: currentTambahanUrl || null,
+                    nota_photo_url: currentNotaUrl || null,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'ADD_ADDITIONAL_ORDER', `Menambahkan orderan tambahan ${isDiBawaSendiri ? '(Di Bawa Sendiri)' : 'Rp ' + addNominal.toLocaleString('id-ID')} pada order ${idOrder}`);
+                }
+
+                return {
+                    success: true,
+                    message: `Orderan tambahan ${isDiBawaSendiri ? '(Di Bawa Sendiri)' : 'Rp ' + addNominal.toLocaleString('id-ID')} berhasil disimpan!`,
+                    new_total_tambahan: newTotalTambahan
+                };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteAdditionalOrderPhoto: async function(idOrder, photoIdx, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser || (currentUser.role !== 'Super Admin' && currentUser.role !== 'Owner' && currentUser.role !== 'Admin' && currentUser.role !== 'Staff Operasional' && currentUser.role !== 'Operasional')) {
+                    return { success: false, message: 'AKSES DITOLAK: Hanya Admin dan Staff Operasional yang berhak menghapus foto orderan tambahan!' };
+                }
+
+                const { data: order, error } = await sb.from('orders').select('additional_nota_url').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let urlList = (order.additional_nota_url || '').split(',').map(s => s.trim()).filter(Boolean);
+                const idx = parseInt(photoIdx, 10) - 1;
+                if (idx >= 0 && idx < urlList.length) {
+                    urlList.splice(idx, 1);
+                }
+
+                await sb.from('orders').update({
+                    additional_nota_url: urlList.length > 0 ? urlList.join(', ') : null,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (currentUser) {
+                    await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'DELETE_ADDITIONAL_PHOTO', `Menghapus foto orderan tambahan #${photoIdx} pada order ${idOrder}`);
+                }
+
+                return { success: true, message: 'Foto nota tambahan berhasil dihapus.' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        continuePartialDelivery: async function(idOrder, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser) return { success: false, message: 'AKSES DITOLAK: Silakan login terlebih dahulu!' };
+
+                const { data: order, error } = await sb.from('orders').select('notes, delivery_notes').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                let rawNotes = order.notes || '';
+                let rawDeliveryNotes = order.delivery_notes || '';
+
+                if (rawNotes.toUpperCase().includes('[TITIP BARANG]')) {
+                    rawNotes = rawNotes.replace(/\[TITIP BARANG\]/gi, '[KIRIMAN TAHAP 2]').trim();
+                }
+                if (rawDeliveryNotes.toUpperCase().includes('[TITIP BARANG]')) {
+                    rawDeliveryNotes = rawDeliveryNotes.replace(/\[TITIP BARANG\]/gi, '[KIRIMAN TAHAP 2]').trim();
+                }
+
+                const nowUtc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                const nowWita = new Date(nowUtc + (8 * 3600 * 1000));
+                const todayStr = `${nowWita.getFullYear()}-${String(nowWita.getMonth() + 1).padStart(2, '0')}-${String(nowWita.getDate()).padStart(2, '0')}`;
+
+                await sb.from('orders').update({
+                    delivery_status: 'Pesanan Masuk / Dimuat',
+                    verification_status: 'Cek Sebagian (Perlu Cek Tahap 2)',
+                    delivery_date: todayStr,
+                    notes: rawNotes,
+                    delivery_notes: rawDeliveryNotes,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'KIRIMAN_LANJUTAN', `Mengaktifkan kiriman lanjutan Tahap 2 pada order ${idOrder}`);
+
+                return { success: true, message: 'Kiriman Lanjutan (Tahap 2) berhasil diaktifkan! Invoice telah berpindah ke folder Pesanan Masuk.' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        updateOrderGmapsLocation: async function(idOrder, linkGmaps, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!currentUser) return { success: false, message: 'AKSES DITOLAK: Silakan login terlebih dahulu!' };
+
+                const { data: order, error } = await sb.from('orders').select('customer_id').eq('id', idOrder).single();
+                if (error || !order) return { success: false, message: 'Order tidak ditemukan' };
+
+                await sb.from('orders').update({
+                    maps_url: linkGmaps,
+                    updated_at: new Date().toISOString()
+                }).eq('id', idOrder);
+
+                if (order.customer_id) {
+                    await sb.from('customers').update({
+                        maps_url: linkGmaps,
+                        updated_at: new Date().toISOString()
+                    }).eq('id', order.customer_id);
+                }
+
+                await logActivity(currentUser.id_user || currentUser.user_code, currentUser.nama || currentUser.full_name, currentUser.role, 'UPDATE_GMAPS_GPS', `Meng-update titik lokasi GPS pelanggan untuk order ${idOrder}`);
+
+                return { success: true, message: 'Titik lokasi GPS berhasil diperbarui secara instan!' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        updateGmapsLink: async function(idOrder, urlGmaps, idUser, namaUser) {
+            return this.updateOrderGmapsLocation(idOrder, urlGmaps, { id_user: idUser, nama: namaUser, role: 'Sopir' });
+        },
+
+        resolveGoogleMapsLocationUrl: async function(url) {
+            try {
+                if (!url || typeof url !== 'string') return { success: false, message: 'URL kosong' };
+                url = url.trim();
+
+                const coordMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                                   url.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                                   url.match(/place\/(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                                   url.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+
+                if (coordMatch) {
+                    return {
+                        success: true,
+                        lat: parseFloat(coordMatch[1]),
+                        lng: parseFloat(coordMatch[2])
+                    };
+                }
+
+                const gasEndpoint = window.__TB_GAS_BACKEND_URL;
+                if (gasEndpoint) {
+                    try {
+                        const res = await fetch(gasEndpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            body: JSON.stringify({ action: 'resolveGoogleMapsLocationUrl', url: url }),
+                            redirect: 'follow'
+                        });
+                        const json = await res.json();
+                        if (json && json.success && json.lat && json.lng) return json;
+                    } catch(e) {}
+                }
+
+                return { success: false, message: 'Koordinat tidak ditemukan pada tautan ini.' };
+            } catch(e) {
+                return { success: false, message: e.message };
+            }
+        },
+
+        calculateRouteDistanceBackend: async function(sLat, sLng, cLat, cLng) {
+            try {
+                const lat1 = parseFloat(sLat);
+                const lon1 = parseFloat(sLng);
+                const lat2 = parseFloat(cLat);
+                const lon2 = parseFloat(cLng);
+
+                if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) {
+                    return { success: false, message: 'Koordinat tidak valid' };
+                }
+
+                const R = 6371;
+                const dLat = (lat2 - lat1) * Math.PI / 180;
+                const dLon = (lon2 - lon1) * Math.PI / 180;
+                const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                          Math.sin(dLon/2) * Math.sin(dLon/2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                const straightKm = R * c;
+                const routeKm = Math.round(straightKm * 1.3 * 10) / 10;
+                const durationMins = Math.max(5, Math.round(routeKm * 2.5));
+
+                return {
+                    success: true,
+                    distanceKm: routeKm,
+                    durationMins: durationMins,
+                    origin: { lat: lat1, lng: lon1 },
+                    destination: { lat: lat2, lng: lon2 }
+                };
+            } catch(e) {
+                return { success: false, message: e.message };
+            }
         },
 
         archiveCompletedOrders: async function() {
@@ -1709,44 +2264,135 @@
             }
         },
 
-        // --- HELPER / KARNET APPROVALS ---
-        getPendingKarnetRequests: async function(user) {
+        // --- HELPER / KARNET APPROVALS (SISTEM PERSETUJUAN PERGANTIAN KARNET) ---
+        requestChangeKarnet: async function(reqPayload) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                if (!reqPayload || !reqPayload.driverId) return { success: false, message: 'Data permohonan tidak valid!' };
+
+                const nowUtc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                const nowWita = new Date(nowUtc + (8 * 3600 * 1000));
+                const timestampStr = `${String(nowWita.getDate()).padStart(2, '0')}/${String(nowWita.getMonth() + 1).padStart(2, '0')}/${nowWita.getFullYear()} ${String(nowWita.getHours()).padStart(2, '0')}:${String(nowWita.getMinutes()).padStart(2, '0')}`;
+
+                const payload = {
+                    driverId: reqPayload.driverId,
+                    driverName: reqPayload.driverName || 'Sopir',
+                    prevKarnet: reqPayload.prevKarnet || '-',
+                    newKarnet: reqPayload.newKarnet || '-',
+                    timestamp: reqPayload.timestamp || timestampStr,
+                    status: 'MENUNGGU_PERSETUJUAN'
+                };
+
+                await sb.from('system_configs').upsert({
+                    key: 'KARNET_REQ_' + reqPayload.driverId,
+                    value: JSON.stringify(payload),
+                    description: 'Permohonan Ganti Karnet Sopir: ' + (reqPayload.driverName || reqPayload.driverId),
+                    updated_at: new Date().toISOString()
+                });
+
+                return { success: true, message: 'Permintaan ganti karnet berhasil diajukan!' };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        getPendingKarnetRequests: async function(currentUser) {
             const sb = getClient();
             if (!sb) return { success: true, data: [] };
             try {
-                const { data, error } = await sb
-                    .from('helper_assignment_requests')
-                    .select('*')
-                    .eq('status', 'PENDING')
-                    .order('created_at', { ascending: false });
+                if (currentUser && currentUser.role === 'Sopir') {
+                    const key = 'KARNET_REQ_' + (currentUser.id_user || currentUser.user_code);
+                    const { data } = await sb.from('system_configs').select('value').eq('key', key).maybeSingle();
+                    if (data && data.value) {
+                        try {
+                            return { success: true, data: [JSON.parse(data.value)] };
+                        } catch(e) {}
+                    }
+                    return { success: true, data: [] };
+                }
+
+                // Untuk Admin / Staff Operasional / Owner: ambil semua permintaan ganti karnet
+                const { data, error } = await sb.from('system_configs').select('key, value').like('key', 'KARNET_REQ_%');
                 if (error || !data || !Array.isArray(data)) return { success: true, data: [] };
-                const valid = data.filter(r => r && r.driver_id && r.driver_name && r.requested_helper);
-                const mapped = valid.map(r => ({
-                    driverId: r.driver_id,
-                    driverName: r.driver_name,
-                    prevKarnet: r.previous_helper || '-',
-                    newKarnet: r.requested_helper || '-',
-                    timestamp: formatIndonesianDateTime(r.request_date || r.created_at),
-                    status: r.status
-                }));
-                return { success: true, data: mapped };
-            } catch(e) {
+
+                const pendingList = [];
+                data.forEach(item => {
+                    if (item && item.value) {
+                        try {
+                            const parsed = JSON.parse(item.value);
+                            if (parsed && (parsed.status === 'MENUNGGU_PERSETUJUAN' || parsed.status === 'PENDING')) {
+                                pendingList.push(parsed);
+                            }
+                        } catch(e) {}
+                    }
+                });
+
+                return { success: true, data: pendingList };
+            } catch(err) {
                 return { success: true, data: [] };
             }
         },
 
-        respondChangeKarnet: async function(driverId, action) {
+        respondChangeKarnet: async function(driverId, action, currentUser) {
             const sb = getClient();
             if (!sb) return { success: false, message: 'Database error' };
             try {
-                const status = action === 'APPROVE' ? 'DISETUJUI' : 'DITOLAK';
-                await sb.from('helper_assignment_requests')
-                    .update({ status: status })
-                    .eq('driver_id', driverId)
-                    .eq('status', 'PENDING');
-                return { success: true, message: `Permintaan karnet berhasil di-${status.toLowerCase()}` };
-            } catch(e) {
-                return { success: false, message: e.message };
+                const key = 'KARNET_REQ_' + driverId;
+                const { data } = await sb.from('system_configs').select('value').eq('key', key).maybeSingle();
+                if (!data || !data.value) {
+                    return { success: false, message: 'Permintaan ganti karnet tidak ditemukan atau sudah diproses!' };
+                }
+
+                const reqObj = JSON.parse(data.value);
+                const actionUpper = String(action || '').toUpperCase();
+                const isApprove = (actionUpper === 'APPROVE' || actionUpper === 'SETUJUI' || actionUpper === 'SETUJU');
+                const approverName = (currentUser && (currentUser.nama || currentUser.full_name)) ? (currentUser.nama || currentUser.full_name) : 'Admin';
+                const approverRole = (currentUser && currentUser.role) ? currentUser.role : 'Admin';
+                const approverId = (currentUser && (currentUser.id_user || currentUser.user_code)) ? (currentUser.id_user || currentUser.user_code) : 'ADMIN';
+
+                const nowUtc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                const nowWita = new Date(nowUtc + (8 * 3600 * 1000));
+                const timeFormatted = `${String(nowWita.getDate()).padStart(2, '0')}/${String(nowWita.getMonth() + 1).padStart(2, '0')}/${nowWita.getFullYear()} ${String(nowWita.getHours()).padStart(2, '0')}:${String(nowWita.getMinutes()).padStart(2, '0')}`;
+                const dateStr = `${nowWita.getFullYear()}-${String(nowWita.getMonth() + 1).padStart(2, '0')}-${String(nowWita.getDate()).padStart(2, '0')}`;
+
+                if (isApprove) {
+                    reqObj.status = 'DISETUJUI';
+                    reqObj.approvedBy = approverName;
+                    reqObj.approvedAt = timeFormatted;
+
+                    await sb.from('system_configs').upsert([
+                        {
+                            key: key,
+                            value: JSON.stringify(reqObj),
+                            updated_at: new Date().toISOString()
+                        },
+                        {
+                            key: 'ACTIVE_KARNET_' + driverId,
+                            value: JSON.stringify({ karnet: reqObj.newKarnet, date: dateStr }),
+                            description: 'Karnet Aktif Sopir: ' + reqObj.driverName,
+                            updated_at: new Date().toISOString()
+                        }
+                    ]);
+
+                    await logActivity(approverId, approverName, approverRole, 'APPROVE_KARNET', `Menyetujui perubahan karnet ${reqObj.driverName} dari ${reqObj.prevKarnet} ke ${reqObj.newKarnet}`);
+                    return { success: true, message: 'Perubahan karnet berhasil disetujui.', newKarnet: reqObj.newKarnet };
+                } else {
+                    reqObj.status = 'DITOLAK';
+                    reqObj.rejectedBy = approverName;
+                    reqObj.rejectedAt = timeFormatted;
+
+                    await sb.from('system_configs').upsert({
+                        key: key,
+                        value: JSON.stringify(reqObj),
+                        updated_at: new Date().toISOString()
+                    });
+
+                    await logActivity(approverId, approverName, approverRole, 'REJECT_KARNET', `Menolak perubahan karnet ${reqObj.driverName} dari ${reqObj.prevKarnet} ke ${reqObj.newKarnet}`);
+                    return { success: true, message: 'Permintaan ganti karnet ditolak.' };
+                }
+            } catch(err) {
+                return { success: false, message: err.message };
             }
         },
 
@@ -1754,12 +2400,97 @@
             const sb = getClient();
             if (!sb) return { success: true };
             try {
-                await sb.from('helper_assignment_requests')
-                    .delete()
-                    .eq('driver_id', driverId);
+                await sb.from('system_configs').delete().eq('key', 'KARNET_REQ_' + driverId);
                 return { success: true };
+            } catch(err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        setDriverKarnetBackend: async function(driverId, karnetName, meta) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database error' };
+            try {
+                const nowUtc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                const nowWita = new Date(nowUtc + (8 * 3600 * 1000));
+                const todayStr = `${nowWita.getFullYear()}-${String(nowWita.getMonth() + 1).padStart(2, '0')}-${String(nowWita.getDate()).padStart(2, '0')}`;
+                const timeStr = `${String(nowWita.getHours()).padStart(2, '0')}:${String(nowWita.getMinutes()).padStart(2, '0')}`;
+
+                const dataToSave = {
+                    karnet: karnetName,
+                    date: todayStr,
+                    time: (meta && meta.time) ? meta.time : timeStr,
+                    timestamp: (meta && meta.timestamp) ? meta.timestamp : Date.now()
+                };
+
+                await sb.from('system_configs').upsert({
+                    key: 'ACTIVE_KARNET_' + driverId,
+                    value: JSON.stringify(dataToSave),
+                    description: 'Karnet Aktif Sopir: ' + driverId,
+                    updated_at: new Date().toISOString()
+                });
+
+                return { success: true, message: 'Karnet aktif tersimpan di server!' };
             } catch(e) {
-                return { success: true };
+                return { success: false, message: e.message };
+            }
+        },
+
+        getKarnetPopupConfig: async function(currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: true, jamPagi: '07:00', jamSiang: '', jamSore: '', frekuensi: '1', hariAktif: ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'], status: 'Aktif' };
+            try {
+                const { data } = await sb.from('system_configs').select('value').eq('key', 'KARNET_TASKS_DATA').maybeSingle();
+                if (data && data.value) {
+                    const tasks = JSON.parse(data.value);
+                    if (Array.isArray(tasks) && tasks.length > 0) {
+                        const activeTasks = tasks.filter(t => t.status === 'Aktif');
+                        if (activeTasks.length > 0) {
+                            if (!currentUser || currentUser.role !== 'Sopir') {
+                                const first = activeTasks[0];
+                                return {
+                                    success: true,
+                                    jamPagi: first.jamPagi || '07:00',
+                                    jamSiang: first.jamSiang || '',
+                                    jamSore: first.jamSore || '',
+                                    frekuensi: first.frekuensi || '1',
+                                    hariAktif: first.hariAktif || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'],
+                                    status: 'Aktif'
+                                };
+                            }
+
+                            const driverName = (currentUser.nama || '').toLowerCase().trim();
+                            const driverId = (currentUser.id_user || '').toLowerCase().trim();
+
+                            const matching = activeTasks.find(t => {
+                                if (t.isAllDrivers) return true;
+                                if (!t.drivers || !Array.isArray(t.drivers)) return false;
+                                if (t.drivers.includes('Semua Sopir')) return true;
+                                return t.drivers.some(d => {
+                                    const s = String(d).toLowerCase().trim();
+                                    const cleanD = s.replace(/^\d+[\.\s\-]+/, '').trim();
+                                    const cleanU = driverName.replace(/^\d+[\.\s\-]+/, '').trim();
+                                    return s === driverName || s === driverId || cleanD === cleanU || driverName.includes(s) || s.includes(driverName);
+                                });
+                            });
+
+                            if (matching) {
+                                return {
+                                    success: true,
+                                    jamPagi: matching.jamPagi || '07:00',
+                                    jamSiang: matching.jamSiang || '',
+                                    jamSore: matching.jamSore || '',
+                                    frekuensi: matching.frekuensi || '1',
+                                    hariAktif: matching.hariAktif || ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'],
+                                    status: 'Aktif'
+                                };
+                            }
+                        }
+                    }
+                }
+                return { success: true, jamPagi: '07:00', jamSiang: '', jamSore: '', frekuensi: '1', hariAktif: ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'], status: 'Aktif' };
+            } catch(e) {
+                return { success: true, jamPagi: '07:00', jamSiang: '', jamSore: '', frekuensi: '1', hariAktif: ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'], status: 'Aktif' };
             }
         },
 
@@ -2696,14 +3427,19 @@
     // =========================================================================
     // 4. GOOGLE DRIVE CDN PHOTO HELPER (lh3.googleusercontent.com)
     // =========================================================================
+    const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycby7JcJ_trM0THoWB1F3Zjd1uh-iPFXgVe1wxSxn7fu0/exec';
+    window.__TB_GAS_BACKEND_URL = window.__TB_GAS_BACKEND_URL || 
+        (typeof localStorage !== 'undefined' ? localStorage.getItem('TB_GAS_BACKEND_URL') : null) || 
+        DEFAULT_GAS_URL;
+
     async function uploadToGoogleDriveCdn(base64Data, filenamePrefix) {
         if (!base64Data || typeof base64Data !== 'string' || base64Data.length < 50) return '';
         if (base64Data.startsWith('http://') || base64Data.startsWith('https://')) return base64Data;
 
-        const gasEndpoint = window.__TB_GAS_BACKEND_URL;
+        const gasEndpoint = window.__TB_GAS_BACKEND_URL || DEFAULT_GAS_URL;
         if (gasEndpoint) {
             try {
-                console.log('[Drive CDN] Mengunggah foto ke Google Drive CDN via GAS...');
+                console.log('[Drive CDN] Mengunggah foto ke Google Drive CDN via GAS:', filenamePrefix);
                 const res = await fetch(gasEndpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -2711,12 +3447,14 @@
                         action: 'uploadFileDirectToDrive',
                         base64Data: base64Data,
                         filenamePrefix: filenamePrefix || 'tmr_photo'
-                    })
+                    }),
+                    redirect: 'follow'
                 });
                 const json = await res.json();
-                if (json && json.success && json.url) {
-                    console.log('[Drive CDN] Sukses mendapatkan URL lh3:', json.url);
-                    return json.url;
+                if (json && json.success && (json.url || json.direct_url)) {
+                    const finalUrl = json.url || json.direct_url;
+                    console.log('[Drive CDN] Sukses mendapatkan URL lh3:', finalUrl);
+                    return finalUrl;
                 }
             } catch (err) {
                 console.warn('[Drive CDN Warning] Gagal upload ke GAS Drive, menggunakan fallback:', err);
@@ -2725,6 +3463,19 @@
         return base64Data;
     }
     window.__uploadToGoogleDriveCdn = uploadToGoogleDriveCdn;
+
+    async function uploadMediaPipeline(items, prefix) {
+        if (!items) return [];
+        const list = Array.isArray(items) ? items : [items];
+        const results = [];
+        for (let i = 0; i < list.length; i++) {
+            const item = list[i];
+            if (!item) continue;
+            const url = await uploadToGoogleDriveCdn(item, (prefix || 'tmr') + '_' + (i + 1));
+            if (url) results.push(url);
+        }
+        return results;
+    }
 
     // =========================================================================
     // 5. SUPABASE REALTIME SUBSCRIPTION ENGINE (WEBSOCKETS)
