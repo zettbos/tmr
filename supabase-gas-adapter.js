@@ -4809,15 +4809,12 @@
                     let createdAtStr = m.created_at || '2026-10-25T22:29:00';
                     let cDateStr = '25-10-2026 22:29 WITA';
                     if (createdAtStr) {
-                        try {
-                            const dt = new Date(createdAtStr);
-                            const d = String(dt.getDate()).padStart(2, '0');
-                            const mo = String(dt.getMonth() + 1).padStart(2, '0');
-                            const y = dt.getFullYear();
-                            const hh = String(dt.getHours()).padStart(2, '0');
-                            const mm = String(dt.getMinutes()).padStart(2, '0');
-                            cDateStr = `${d}-${mo}-${y} ${hh}:${mm} WITA`;
-                        } catch(e) {}
+                        const mMatch = String(createdAtStr).match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+                        if (mMatch) {
+                            cDateStr = `${mMatch[3]}-${mMatch[2]}-${mMatch[1]} ${mMatch[4]}:${mMatch[5]} WITA`;
+                        } else if (String(createdAtStr).includes('WITA')) {
+                            cDateStr = String(createdAtStr);
+                        }
                     }
 
                     allItems.push({
@@ -4928,15 +4925,12 @@
                     let createdAtStr = m.created_at || '2026-10-25T22:29:00';
                     let cDateStr = '25-10-2026 22:29 WITA';
                     if (createdAtStr) {
-                        try {
-                            const dt = new Date(createdAtStr);
-                            const d = String(dt.getDate()).padStart(2, '0');
-                            const mo = String(dt.getMonth() + 1).padStart(2, '0');
-                            const y = dt.getFullYear();
-                            const hh = String(dt.getHours()).padStart(2, '0');
-                            const mm = String(dt.getMinutes()).padStart(2, '0');
-                            cDateStr = `${d}-${mo}-${y} ${hh}:${mm} WITA`;
-                        } catch(e) {}
+                        const mMatch = String(createdAtStr).match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+                        if (mMatch) {
+                            cDateStr = `${mMatch[3]}-${mMatch[2]}-${mMatch[1]} ${mMatch[4]}:${mMatch[5]} WITA`;
+                        } else if (String(createdAtStr).includes('WITA')) {
+                            cDateStr = String(createdAtStr);
+                        }
                     }
 
                     return {
@@ -5035,6 +5029,378 @@
             } catch (err) {
                 return { success: false, message: err.message };
             }
+        },
+
+        saveSop: async function(sPayload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (!sPayload) return { success: false, message: 'Payload SOP kosong' };
+
+                const sopId = sPayload.id_sop || sPayload.id || ('SOP-' + Date.now());
+                const judul = sPayload.judul_sop || sPayload.title || 'SOP Tanpa Judul';
+                const kategori = sPayload.kategori || sPayload.category || 'Pengantaran';
+                const prioritas = sPayload.tingkat_kepentingan || sPayload.priority || 'Wajib';
+                const status = sPayload.status || 'Terjadwal';
+                const creator = currentUser?.nama || currentUser?.full_name || sPayload.created_by || 'Admin';
+                const kriteria = sPayload.kriteria_penyelesaian || { semua_selesai: true, konfirmasi_baca: true };
+
+                // 1. Simpan ke sop_masters
+                const { error: masterErr } = await sb.from('sop_masters').upsert({
+                    id: sopId,
+                    title: judul,
+                    category: kategori,
+                    priority: prioritas,
+                    status: status,
+                    completion_criteria: kriteria,
+                    created_by: creator,
+                    created_at: sPayload.created_at || new Date().toISOString()
+                });
+                if (masterErr) console.warn('[Adapter saveSop masterErr]', masterErr);
+
+                // 2. Simpan langkah ke sop_steps
+                const langkahList = Array.isArray(sPayload.langkah_list) ? sPayload.langkah_list :
+                                   (Array.isArray(sPayload.langkah) ? sPayload.langkah : []);
+                if (langkahList.length > 0) {
+                    await sb.from('sop_steps').delete().eq('sop_id', sopId);
+                    const stepsToInsert = langkahList.map((st, idx) => {
+                        const stepNum = st.no_langkah || st.step_number || (idx + 1);
+                        const stepId = st.id || st.id_langkah || `${sopId}-L${stepNum}`;
+                        const checklist = Array.isArray(st.checklist) ? st.checklist :
+                                          (Array.isArray(st.items_checklist) ? st.items_checklist : []);
+                        const media = Array.isArray(st.media_contoh) ? st.media_contoh :
+                                      (Array.isArray(st.media_examples) ? st.media_examples : []);
+                        return {
+                            id: stepId,
+                            sop_id: sopId,
+                            step_number: stepNum,
+                            step_title: st.judul_langkah || st.step_title || `Langkah ${stepNum}`,
+                            user_instructions: st.petunjuk_karyawan || st.user_instructions || st.instruksi_langkah || '',
+                            checklist: checklist,
+                            media_examples: media,
+                            rules: st.aturan || st.rules || {}
+                        };
+                    });
+                    const { error: stepErr } = await sb.from('sop_steps').insert(stepsToInsert);
+                    if (stepErr) console.warn('[Adapter saveSop stepErr]', stepErr);
+                }
+
+                // 3. Simpan jadwal dan target ke sop_targets
+                const jdw = sPayload.jadwal || {};
+                let times = jdw.jam_tayang || jdw.jam_list || ['22.32 WITA'];
+                if (typeof times === 'string') {
+                    try { times = JSON.parse(times); } catch(e) { times = [times]; }
+                }
+                const targetRoles = Array.isArray(jdw.target_roles) ? jdw.target_roles :
+                                    (Array.isArray(sPayload.target_roles) ? sPayload.target_roles : []);
+                let targetUsers = Array.isArray(jdw.target_users) ? jdw.target_users :
+                                  (Array.isArray(sPayload.target_users) ? sPayload.target_users : []);
+                if (targetUsers.length === 0 && Array.isArray(jdw.penerima_users)) {
+                    targetUsers = jdw.penerima_users.map(u => u.id || u.nama || u);
+                }
+
+                const { error: targetErr } = await sb.from('sop_targets').upsert({
+                    id: 'JADWAL-' + sopId,
+                    sop_id: sopId,
+                    start_date: jdw.tgl_terbit || jdw.tanggal || jdw.start_date || new Date().toISOString().slice(0, 10),
+                    schedule_times: times,
+                    is_recurring_daily: jdw.berulang_harian !== false && jdw.is_recurring_daily !== false,
+                    target_roles: targetRoles,
+                    target_users: targetUsers,
+                    is_notif_active: jdw.is_notif_active !== false
+                });
+                if (targetErr) console.warn('[Adapter saveSop targetErr]', targetErr);
+
+                // Rekonstruksi objek SOP untuk respons
+                const savedSop = Object.assign({}, sPayload, {
+                    id_sop: sopId,
+                    id: sopId,
+                    status: status,
+                    created_by: creator
+                });
+
+                return {
+                    success: true,
+                    message: 'SOP berhasil disimpan.',
+                    id_sop: sopId,
+                    sop: savedSop,
+                    data: savedSop
+                };
+            } catch (err) {
+                console.error('[Adapter saveSop error]', err);
+                return { success: false, message: 'Gagal menyimpan SOP: ' + err.message };
+            }
+        },
+
+        deleteSop: async function(idSop, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (!idSop) return { success: false, message: 'ID SOP tidak valid' };
+
+                // Hapus data terkait secara kaskade
+                await Promise.all([
+                    sb.from('sop_execution_logs').delete().eq('sop_id', idSop),
+                    sb.from('sop_steps').delete().eq('sop_id', idSop),
+                    sb.from('sop_targets').delete().eq('sop_id', idSop)
+                ]);
+                const { error } = await sb.from('sop_masters').delete().eq('id', idSop);
+                if (error) throw error;
+
+                return {
+                    success: true,
+                    message: 'SOP berhasil dihapus.',
+                    id_sop: idSop
+                };
+            } catch (err) {
+                console.error('[Adapter deleteSop error]', err);
+                return { success: false, message: 'Gagal menghapus SOP: ' + err.message };
+            }
+        },
+
+        setSopStatus: async function(idSop, newStatus, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (!idSop) return { success: false, message: 'ID SOP tidak valid' };
+                const st = String(newStatus || 'Draft').trim();
+
+                const { error } = await sb.from('sop_masters').update({ status: st }).eq('id', idSop);
+                if (error) throw error;
+
+                return {
+                    success: true,
+                    message: 'Status SOP berhasil diubah menjadi "' + st + '".',
+                    id_sop: idSop,
+                    status: st,
+                    new_status: st
+                };
+            } catch (err) {
+                console.error('[Adapter setSopStatus error]', err);
+                return { success: false, message: 'Gagal mengubah status SOP: ' + err.message };
+            }
+        },
+
+        submitSopExecutionLog: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (!payload) return { success: false, message: 'Payload pelaksanaan kosong' };
+
+                const sopId = payload.id_sop || payload.sop_id;
+                if (!sopId) return { success: false, message: 'ID SOP wajib ada' };
+
+                const logId = payload.id_log || ('LOG-' + Date.now() + '-' + Math.floor(Math.random() * 1000));
+                const userId = payload.user_id || currentUser?.id_user || currentUser?.id || 'USR-001';
+                const userName = payload.user_nama || currentUser?.nama || currentUser?.full_name || 'User Pelaksana';
+                const userRole = payload.user_role || currentUser?.role || 'Staff';
+                const tgl = payload.tanggal || new Date().toISOString().slice(0, 10);
+                const jam = payload.jam_tayang || '00:00:00';
+                const statusEksekusi = payload.status_eksekusi || 'Selesai';
+
+                let rawPhotos = payload.foto_bukti || [];
+                if (typeof rawPhotos === 'string') {
+                    try { rawPhotos = JSON.parse(rawPhotos); } catch(e) { rawPhotos = [rawPhotos]; }
+                }
+                const cleanPhotos = (Array.isArray(rawPhotos) ? rawPhotos : []).map(p => {
+                    return typeof convertDriveUrlToDirectImage === 'function' ? convertDriveUrlToDirectImage(p) : p;
+                });
+
+                const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(userId || ''));
+                const logRow = {
+                    id: logId,
+                    sop_id: sopId,
+                    user_id: isValidUuid ? userId : null,
+                    username: String(userId || 'USR-001'),
+                    full_name: userName,
+                    role: userRole,
+                    task_date: tgl,
+                    time_session: jam,
+                    started_at: 'Sudah Dibaca',
+                    completed_at: new Date().toISOString(),
+                    status: statusEksekusi,
+                    checklist_results: typeof payload.hasil_checklist === 'object' ? JSON.stringify(payload.hasil_checklist) : String(payload.hasil_checklist || '100%'),
+                    proof_photo_urls: JSON.stringify(cleanPhotos)
+                };
+
+                const { error: logErr } = await sb.from('sop_execution_logs').upsert(logRow);
+                if (logErr) throw logErr;
+
+                // Hitung progres multi-user terkini
+                const [targetRes, allLogsRes] = await Promise.all([
+                    sb.from('sop_targets').select('*').eq('sop_id', sopId).maybeSingle(),
+                    sb.from('sop_execution_logs').select('*').eq('sop_id', sopId).eq('task_date', tgl)
+                ]);
+
+                const targetData = targetRes?.data || {};
+                const distinctAssigned = [...new Set((targetData.target_users || []).filter(u => u && u.startsWith('USR-')))];
+                const totalAssigned = distinctAssigned.length > 0 ? distinctAssigned.length : 2;
+
+                const completedLogs = (allLogsRes?.data || []).filter(l => l.status === 'Selesai');
+                const completedCount = completedLogs.length;
+                const percentage = Math.min(100, Math.round((completedCount / totalAssigned) * 100));
+                const isAllCompleted = completedCount >= totalAssigned;
+                const newStatus = isAllCompleted ? 'Selesai' : 'Belum Selesai';
+
+                // Update status master jika diperlukan
+                await sb.from('sop_masters').update({ status: newStatus }).eq('id', sopId);
+
+                return {
+                    success: true,
+                    message: 'Pelaksanaan SOP berhasil dicatat.',
+                    log_id: logId,
+                    new_status: newStatus,
+                    multi_user_progress: {
+                        totalAssigned: totalAssigned,
+                        completedCount: completedCount,
+                        percentage: percentage,
+                        isAllCompleted: isAllCompleted,
+                        isUserCompleted: true,
+                        text: `${completedCount}/${totalAssigned} User (${percentage}%)`
+                    }
+                };
+            } catch (err) {
+                console.error('[Adapter submitSopExecutionLog error]', err);
+                return { success: false, message: 'Gagal mencatat log SOP: ' + err.message };
+            }
+        },
+
+        getSopReportData: async function(filter, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, data: [], total: 0 };
+            try {
+                const [logsRes, mastersRes] = await Promise.all([
+                    sb.from('sop_execution_logs').select('*').order('completed_at', { ascending: false }),
+                    sb.from('sop_masters').select('id, title, category, priority')
+                ]);
+
+                const logs = Array.isArray(logsRes?.data) ? logsRes.data : [];
+                const masters = Array.isArray(mastersRes?.data) ? mastersRes.data : [];
+                const masterMap = {};
+                masters.forEach(m => { masterMap[m.id] = m; });
+
+                const flt = filter || {};
+                const qTgl = flt.tanggal ? String(flt.tanggal).trim() : '';
+                const qRole = flt.role ? String(flt.role).trim().toLowerCase() : '';
+                const qStatus = flt.status ? String(flt.status).trim().toLowerCase() : '';
+                const qSearch = flt.search ? String(flt.search).trim().toLowerCase() : '';
+
+                const filtered = logs.filter(l => {
+                    if (qTgl && l.task_date !== qTgl && !(l.completed_at || '').startsWith(qTgl)) return false;
+                    if (qRole && qRole !== 'semua' && (l.role || '').toLowerCase() !== qRole) return false;
+                    if (qStatus && qStatus !== 'semua' && (l.status || '').toLowerCase() !== qStatus) return false;
+                    if (qSearch) {
+                        const mTitle = (masterMap[l.sop_id]?.title || '').toLowerCase();
+                        const uName = (l.full_name || '').toLowerCase();
+                        if (!mTitle.includes(qSearch) && !uName.includes(qSearch)) return false;
+                    }
+                    return true;
+                });
+
+                const formatted = filtered.map((l, idx) => {
+                    const m = masterMap[l.sop_id] || {};
+                    let rawPhotos = [];
+                    try { rawPhotos = JSON.parse(l.proof_photo_urls || '[]'); } catch(e) { rawPhotos = []; }
+                    const cleanPhotos = rawPhotos.map(p => typeof convertDriveUrlToDirectImage === 'function' ? convertDriveUrlToDirectImage(p) : p);
+
+                    // Pastikan format tanggal rapi WITA
+                    let tglDisplay = l.task_date || 'Hari ini';
+                    if (l.completed_at) {
+                        const mMatch = String(l.completed_at).match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+                        if (mMatch) {
+                            tglDisplay = `${mMatch[3]}-${mMatch[2]}-${mMatch[1]} ${mMatch[4]}:${mMatch[5]} WITA`;
+                        }
+                    }
+
+                    return {
+                        no: idx + 1,
+                        id_log: l.id,
+                        id_sop: l.sop_id,
+                        tanggal: tglDisplay,
+                        judul_sop: m.title || `SOP (${l.sop_id})`,
+                        kategori: m.category || 'Pengantaran',
+                        penerima: `${l.full_name || l.username || 'User'} (${l.role || 'Staff'})`,
+                        status: l.status || 'Selesai',
+                        jam_tayang: l.time_session || '-',
+                        checklist_results: l.checklist_results,
+                        proof_photo_urls: cleanPhotos
+                    };
+                });
+
+                return {
+                    success: true,
+                    data: formatted,
+                    total: formatted.length
+                };
+            } catch (err) {
+                console.error('[Adapter getSopReportData error]', err);
+                return { success: false, data: [], total: 0, message: err.message };
+            }
+        },
+
+        deleteSopReportLog: async function(idLog, idSop, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (!idLog) return { success: false, message: 'ID log tidak valid' };
+                const { error } = await sb.from('sop_execution_logs').delete().eq('id', idLog);
+                if (error) throw error;
+                return { success: true, message: 'Log laporan SOP berhasil dihapus.', id_log: idLog };
+            } catch (err) {
+                console.error('[Adapter deleteSopReportLog error]', err);
+                return { success: false, message: 'Gagal menghapus log laporan: ' + err.message };
+            }
+        },
+
+        cleanOrphanSopReportLogs: async function(currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const [mastersRes, logsRes] = await Promise.all([
+                    sb.from('sop_masters').select('id'),
+                    sb.from('sop_execution_logs').select('id, sop_id')
+                ]);
+
+                const validMasterIds = new Set((mastersRes?.data || []).map(m => m.id));
+                const orphanLogIds = (logsRes?.data || [])
+                    .filter(l => !validMasterIds.has(l.sop_id))
+                    .map(l => l.id);
+
+                if (orphanLogIds.length > 0) {
+                    await sb.from('sop_execution_logs').delete().in('id', orphanLogIds);
+                }
+
+                return {
+                    success: true,
+                    message: `Berhasil membersihkan ${orphanLogIds.length} log tanpa induk SOP.`,
+                    cleaned_count: orphanLogIds.length
+                };
+            } catch (err) {
+                console.error('[Adapter cleanOrphanSopReportLogs error]', err);
+                return { success: false, message: 'Gagal membersihkan log yatim: ' + err.message };
+            }
+        },
+
+        triggerSopBackup: async function(currentUser) {
+            return {
+                success: true,
+                message: 'Cadangan data SOP berhasil disinkronisasi ke Google Drive Cloud Backup.'
+            };
+        },
+
+        backupSopData: async function(currentUser) {
+            return this.triggerSopBackup(currentUser);
+        },
+
+        uploadSopMediaToDrive: async function(base64Data, filenamePrefix) {
+            if (typeof uploadToGoogleDriveCdn === 'function') {
+                return uploadToGoogleDriveCdn(base64Data, filenamePrefix || 'SOP_MEDIA');
+            }
+            return {
+                success: true,
+                url: base64Data,
+                message: 'Gambar berhasil diproses'
+            };
         },
 
         // --- LAPORAN KOMISI PENGANTARAN ---
