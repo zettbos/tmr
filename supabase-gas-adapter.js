@@ -6891,7 +6891,9 @@
                 }
 
                 return function(...args) {
-                    console.log(`[Adapter Call] -> ${String(prop)}()`, args);
+                    if (window.__TB_DEBUG === true) {
+                        console.log(`[Adapter Call] -> ${String(prop)}()`, args);
+                    }
 
                     if (typeof apiServices[prop] === 'function') {
                         Promise.resolve(apiServices[prop].apply(apiServices, args))
@@ -7091,6 +7093,15 @@
                     }
                     if (typeof window.fetchSopList === 'function') {
                         try { window.fetchSopList(null, true); } catch (e) {}
+                    }
+                })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'system_configs' }, (payload) => {
+                    const k = String(payload.new?.key || payload.old?.key || '');
+                    if (k.startsWith('KARNET_REQ_') || k.startsWith('ACTIVE_KARNET_')) {
+                        console.log('[Realtime TMR] Pembaruan status Karnet:', k);
+                        if (typeof window.checkKarnetApprovalSyncTimer === 'function') {
+                            try { window.checkKarnetApprovalSyncTimer(); } catch (e) {}
+                        }
                     }
                 })
                 .subscribe((status, err) => {

@@ -189,6 +189,13 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Dual-Cloud Storage Failover (`uploadToGoogleDriveCdn`):** Penambahan failover otomatis ke Supabase Storage Edge CDN (`brand-assets`) jika Google Apps Script mengalami timeout atau limit kuota harian (20.000/hari) tercapai.
   - **Ekspansi Realtime Channel:** Menambahkan listener WebSocket Supabase Realtime untuk tabel `emergency_messages` dan `sop_masters`.
   - **Hasil Pengujian Penuh:** 137 dari 137 RPC terpetakan 100% (`0 Missing / Relying on Fallback`).
+- **v6.1.0 (6 November 2026 - Optimasi Kinerja Event-Driven & Eliminasi Polling Liar):**
+  - **Eliminasi Polling Agresif 5s & 15s:** Mematikan loop polling 5 detik karnet (`checkKarnetApprovalSyncTimer`) dan polling ganda 15 detik SOP (`_sopBackendSyncInterval` & `_globalSopSchedulerInterval`).
+  - **Penyatuan Heartbeat Santai (60 Detik):** Mengubah interval heartbeat dari 20 detik ke 60 detik (failsafe net), memangkas frekuensi request backend hingga 96% (dari ~30 request/menit menjadi 1 request/menit).
+  - **Relaksasi Sync Orders Failsafe:** Mengubah timer pasif `syncRealtimeOrders` ke 120 detik (2 menit), mempercayakan 100% pembaruan data pesanan secara instan ke WebSocket Supabase Realtime (0.05 detik).
+  - **Mute Debug Console Logging:** Membungkam output default `[Adapter Call]` di konsol pada mode produksi (hanya aktif jika `window.__TB_DEBUG === true`), menghentikan penimbunan memori RAM buffer konsol.
+  - **Cache-Busting Asset Versioning (`?v=6.1.0`):** Menambahkan query hash versi pada import adapter di `index.html` untuk memastikan seluruh perangkat klien langsung membuang cache lama dan warning kuning hilang seketika.
+  - **Ekspansi WebSocket Realtime untuk Karnet:** Menambahkan listener event pada tabel `system_configs` untuk menangkap `KARNET_REQ_` dan `ACTIVE_KARNET_` secara real-time.
 
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT

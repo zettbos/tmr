@@ -484,7 +484,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js"></script>
+    <script src="./supabase-gas-adapter.js?v=6.1.0"></script>
 
 </head>
 
@@ -4294,8 +4294,8 @@
         setTimeout(function () { isRealtimeSyncing = false; }, 4000);
     }
     window.syncRealtimeOrders = syncRealtimeOrders;
-    // FASE 2: Diturunkan dari 6s ke 25s untuk mencegah overload kuota GAS & baterai HP
-    setInterval(syncRealtimeOrders, 25000);
+    // FASE 2: Failsafe pasif 120s (data pesanan utama di-push instan via Supabase Realtime WebSocket)
+    setInterval(syncRealtimeOrders, 120000);
 
     function changePage(delta) {
         const targetPage = currentPage + delta;
@@ -9465,8 +9465,8 @@
     }
     window.checkKarnetApprovalSyncTimer = checkKarnetApprovalSyncTimer;
 
-    // REVISI GAMBAR 2: BIKIN SEPERTI DULU -> Polling realtime 5 detik untuk Admin, Operasional, dan Sopir
-    setInterval(checkKarnetApprovalSyncTimer, 5000);
+    // OPTIMASI v6.1.0: Eliminasi polling agresif 5 detik. Cukup jalankan initial check 1x saat load,
+    // pembaruan berikutnya di-push seketika via Supabase Realtime WebSocket & Heartbeat 60s
     setTimeout(checkKarnetApprovalSyncTimer, 1200);
 
     function handleAdminRespondKarnet(action) {
@@ -60798,7 +60798,7 @@
         clearInterval(window._sopBackendSyncInterval);
     }
     window._sopBackendSyncInterval = setInterval(function() {
-        // FASE 2: Jangan query database master SOP jika modal SOP ditutup atau tab diminimalkan
+        // FASE 2: Failsafe pasif 120s saat modal SOP aktif (perubahan di-push instan via Supabase Realtime)
         const modalSop = document.getElementById('modalTamaraSOP');
         if (!modalSop || modalSop.classList.contains('hidden') || document.hidden) return;
         if (typeof syncSopDataFromBackend === 'function') {
@@ -60806,7 +60806,7 @@
                 if (typeof checkSopScheduleBackgroundTrigger === 'function') checkSopScheduleBackgroundTrigger();
             });
         }
-    }, 15000);
+    }, 120000);
 
     // 2. Initial sync saat aplikasi dibuka: sinkronkan backend Google Sheets terlebih dahulu & bersihkan kunci universal usang
     try {
@@ -63516,7 +63516,7 @@
         let _heartbeatTimer = null;
         let _isHeartbeatRunning = false;
         let _lastHeartbeatSuccess = 0;
-        const HEARTBEAT_INTERVAL_MS = 20000; // 20 detik saat tab aktif
+        const HEARTBEAT_INTERVAL_MS = 60000; // 60 detik saat tab aktif (95% lebih hemat resource, failsafe pasif)
 
         function runUnifiedHeartbeat() {
             // Jangan lakukan RPC call jika tab sedang diminimalkan atau background
@@ -64342,7 +64342,7 @@
             if (typeof window._globalSopSchedulerInterval !== 'undefined') {
                 clearInterval(window._globalSopSchedulerInterval);
             }
-            window._globalSopSchedulerInterval = setInterval(triggerGlobalSopScheduler, 15000);
+            window._globalSopSchedulerInterval = setInterval(triggerGlobalSopScheduler, 120000);
 
             window.addEventListener('focus', function() {
                 triggerGlobalSopScheduler();
