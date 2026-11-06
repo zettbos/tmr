@@ -470,7 +470,21 @@
 
             const logs = (logsRes.data || []).map(l => ({
                 id_log: l.id,
-                timestamp: l.timestamp ? new Date(l.timestamp).toLocaleString('id-ID') : '',
+                timestamp: l.timestamp ? (function(ts) {
+                    try {
+                        const d = new Date(ts);
+                        const utcMs = d.getTime() + (d.getTimezoneOffset() * 60000);
+                        const w = new Date(utcMs + (8 * 3600 * 1000));
+                        const dd = String(w.getDate()).padStart(2, '0');
+                        const mm = String(w.getMonth() + 1).padStart(2, '0');
+                        const yy = w.getFullYear();
+                        const h = String(w.getHours()).padStart(2, '0');
+                        const min = String(w.getMinutes()).padStart(2, '0');
+                        return `${dd}/${mm}/${yy} ${h}:${min}`;
+                    } catch(e) {
+                        return '';
+                    }
+                })(l.timestamp) : '',
                 user: l.user_name || 'User',
                 role: l.role || '',
                 aktivitas: l.action || '',
@@ -1299,12 +1313,13 @@
                     };
                 });
 
-                const now = new Date();
-                const d = String(now.getDate()).padStart(2, '0');
-                const m = String(now.getMonth() + 1).padStart(2, '0');
-                const y = now.getFullYear();
-                const hh = String(now.getHours()).padStart(2, '0');
-                const mm = String(now.getMinutes()).padStart(2, '0');
+                const nowUtc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                const nowWita = new Date(nowUtc + (8 * 3600 * 1000));
+                const d = String(nowWita.getDate()).padStart(2, '0');
+                const m = String(nowWita.getMonth() + 1).padStart(2, '0');
+                const y = nowWita.getFullYear();
+                const hh = String(nowWita.getHours()).padStart(2, '0');
+                const mm = String(nowWita.getMinutes()).padStart(2, '0');
 
                 return {
                     success: true,
@@ -2212,6 +2227,54 @@
             } catch (err) {
                 console.error('[Adapter getCommissionReport error]', err);
                 return { success: false, message: err.message };
+            }
+        },
+
+        // --- LAPORAN ONGKIR (PARITAS APPS SCRIPT GAMBAR 3) ---
+        getLaporanOngkirData: async function(currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected', data: [], drivers: [] };
+            try {
+                const [ordersRes, profilesRes] = await Promise.all([
+                    sb.from('orders').select('*').gt('shipping_cost', 0).order('created_at', { ascending: true }),
+                    sb.from('profiles').select('full_name, role, is_active').eq('role', 'Sopir')
+                ]);
+
+                const drivers = (profilesRes.data || [])
+                    .filter(p => p.is_active !== false)
+                    .map(p => (p.full_name || '').replace(/\s+/g, ' ').trim())
+                    .filter(Boolean);
+
+                if (!drivers.includes('01 PENGANTARAN')) drivers.unshift('01 PENGANTARAN');
+                if (!drivers.includes('02 PENGANTARAN')) drivers.splice(1, 0, '02 PENGANTARAN');
+                if (!drivers.includes('ASWIN')) drivers.push('ASWIN');
+
+                const data = (ordersRes.data || []).map(row => {
+                    const dateFormatted = formatIndonesianDateOnly(row.order_date || row.created_at);
+                    const cleanDriver = (row.driver_name || 'Tanpa Sopir').replace(/\s+/g, ' ').trim();
+                    const cleanCustomer = (row.customer_name || 'Pelanggan Umum').replace(/\s+/g, ' ').trim();
+
+                    return {
+                        id_order: row.id,
+                        tanggal_order: dateFormatted,
+                        tanggal: dateFormatted,
+                        nama_pelanggan: cleanCustomer,
+                        nama_sopir: cleanDriver,
+                        alamat_lengkap: row.customer_address || '-',
+                        biaya_ongkir: Number(row.shipping_cost || 0),
+                        ongkir: Number(row.shipping_cost || 0),
+                        status_pengiriman: row.delivery_status || 'Selesai'
+                    };
+                });
+
+                return {
+                    success: true,
+                    data: data,
+                    drivers: drivers
+                };
+            } catch (err) {
+                console.error('[Adapter getLaporanOngkirData error]', err);
+                return { success: false, message: err.message, data: [], drivers: [] };
             }
         },
 

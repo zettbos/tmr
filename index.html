@@ -8934,7 +8934,11 @@
                 prev.classList.add('hidden');
             }
         }
-        document.getElementById('editAnnouncementModal').classList.remove('hidden');
+        const modalEditAnnounce = document.getElementById('editAnnouncementModal');
+        if (modalEditAnnounce) {
+            modalEditAnnounce.classList.remove('hidden');
+            modalEditAnnounce.style.display = 'flex';
+        }
     }
 
     function removeAnnouncePhotoStaging() {
@@ -9023,7 +9027,10 @@
             }
         }
         const modal = document.getElementById('infoBannerPopupModal');
-        if (modal) modal.classList.remove('hidden');
+        if (modal) {
+            modal.classList.remove('hidden');
+            modal.style.display = 'flex';
+        }
     }
 
     function openDriverKarnetModal() {
@@ -24256,16 +24263,13 @@
 
             <!-- HEADER STATUS BAR & BRANDING (SESUAI GAMBAR 3) -->
             <div class="px-4 pt-4 pb-3 bg-gradient-to-b from-[#08172e] via-[#0a1c38] to-[#061124] border-b border-slate-800/80">
-                <!-- Baris Tombol Menu, Logo TAMARA, Refresh -->
+                <!-- Baris Branding TAMARA & Tombol Aksi (Tanpa Hamburger Icon, Tombol Close Eksplisit) -->
                 <div class="flex items-center justify-between gap-2 mb-2">
-                    <button type="button" onclick="closeModulPajakKIR()"
-                        class="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-95 shadow-md border border-white/10"
-                        title="Tutup Menu">
-                        <i class="fa-solid fa-bars text-base"></i>
-                    </button>
+                    <!-- Invisible Spacer Kiri agar Logo Tengah Tetap Presisi di Posisi Tengah -->
+                    <div class="w-16 h-10 invisible shrink-0"></div>
                     
                     <!-- Center Logo TAMARA Pajak STNK & KIR -->
-                    <div class="text-center flex flex-col items-center">
+                    <div class="text-center flex flex-col items-center flex-1">
                         <div class="relative inline-block">
                             <!-- Lengkungan Merah Di Atas TAMARA -->
                             <div class="w-12 h-1 bg-red-600 rounded-full mx-auto mb-0.5"></div>
@@ -24275,11 +24279,19 @@
                         <p class="text-[10px] text-slate-300 font-semibold tracking-wider">Catat &bull; Ingat &bull; Tepat Waktu</p>
                     </div>
 
-                    <button type="button" onclick="loadPajakDashboardData(true)"
-                        class="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-95 shadow-md border border-white/10"
-                        title="Refresh Data">
-                        <i class="fa-solid fa-rotate-right text-base"></i>
-                    </button>
+                    <!-- Kanan: Tombol Refresh & Tombol Close Silang yang Jelas -->
+                    <div class="flex items-center gap-1.5 shrink-0">
+                        <button type="button" onclick="loadPajakDashboardData(true)"
+                            class="w-9 h-9 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-95 shadow-md border border-white/10 cursor-pointer"
+                            title="Refresh Data">
+                            <i class="fa-solid fa-rotate-right text-sm"></i>
+                        </button>
+                        <button type="button" onclick="closeModulPajakKIR()"
+                            class="w-9 h-9 rounded-2xl bg-red-600 hover:bg-red-700 text-white flex items-center justify-center transition active:scale-95 shadow-md border border-red-500/40 cursor-pointer"
+                            title="Tutup Modul Pajak & KIR">
+                            <i class="fa-solid fa-xmark text-base font-black"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Slogan Dekoratif Kiri & Kanan (Sesuai Gambar 3) -->
@@ -60833,11 +60845,13 @@
             if (!d) return '';
             if (!(d instanceof Date)) d = new Date(d);
             if (isNaN(d.getTime())) return '';
-            const yyyy = d.getFullYear();
-            const MM = String(d.getMonth() + 1).padStart(2, '0');
-            const dd = String(d.getDate()).padStart(2, '0');
-            const HH = String(d.getHours()).padStart(2, '0');
-            const mm = String(d.getMinutes()).padStart(2, '0');
+            const utcMs = d.getTime() + (d.getTimezoneOffset() * 60000);
+            const w = new Date(utcMs + (8 * 3600 * 1000));
+            const yyyy = w.getFullYear();
+            const MM = String(w.getMonth() + 1).padStart(2, '0');
+            const dd = String(w.getDate()).padStart(2, '0');
+            const HH = String(w.getHours()).padStart(2, '0');
+            const mm = String(w.getMinutes()).padStart(2, '0');
             if (fmt === 'yyyy-MM-dd') return yyyy + '-' + MM + '-' + dd;
             if (fmt === 'yyyyMMdd_HHmm') return '' + yyyy + MM + dd + '_' + HH + mm;
             return yyyy + '-' + MM + '-' + dd;
@@ -60858,28 +60872,30 @@
 
         function formatTimeToHHMM(val) {
             if (!val) return '';
-            if (val instanceof Date) {
-                const hh = String(val.getHours()).padStart(2, '0');
-                const mm = String(val.getMinutes()).padStart(2, '0');
-                return hh + ':' + mm;
-            }
-            const str = String(val).trim();
-            if (!str) return '';
-            if (str.includes('GMT') || str.includes('T') || str.length > 10) {
-                const d = new Date(str);
-                if (!isNaN(d.getTime())) {
-                    const hh = String(d.getHours()).padStart(2, '0');
-                    const mm = String(d.getMinutes()).padStart(2, '0');
+            try {
+                if (val instanceof Date) {
+                    const utcMs = val.getTime() + (val.getTimezoneOffset() * 60000);
+                    const w = new Date(utcMs + (8 * 3600 * 1000));
+                    return String(w.getHours()).padStart(2, '0') + ':' + String(w.getMinutes()).padStart(2, '0');
+                }
+                const str = String(val).trim();
+                if (!str) return '';
+                if (str.includes('GMT') || str.includes('T') || str.length > 10) {
+                    const d = new Date(str);
+                    if (!isNaN(d.getTime())) {
+                        const utcMs = d.getTime() + (d.getTimezoneOffset() * 60000);
+                        const w = new Date(utcMs + (8 * 3600 * 1000));
+                        return String(w.getHours()).padStart(2, '0') + ':' + String(w.getMinutes()).padStart(2, '0');
+                    }
+                }
+                const match = str.match(/(\d{1,2}):(\d{2})/);
+                if (match) {
+                    const hh = match[1].padStart(2, '0');
+                    const mm = match[2];
                     return hh + ':' + mm;
                 }
-            }
-            const match = str.match(/(\d{1,2}):(\d{2})/);
-            if (match) {
-                const hh = match[1].padStart(2, '0');
-                const mm = match[2];
-                return hh + ':' + mm;
-            }
-            return '';
+            } catch (e) {}
+            return String(val);
         }
 
         function formatIndonesianPhone(phone) {
@@ -61041,7 +61057,7 @@
             const m = document.getElementById(modalId);
             if (m) {
                 m.classList.add('hidden');
-                m.style.display = 'none';
+                m.style.removeProperty('display');
             }
             setTimeout(function () {
                 const anyOpen = document.querySelectorAll('.fixed.inset-0:not(.hidden)');
@@ -61057,7 +61073,7 @@
         // GLOBAL BRIDGE: MODUL TAMARA PAJAK STNK & KIR
         // Menjamin openModulPajakKIR selalu terdefinisi dan bebas Uncaught ReferenceError
         // ==========================================
-        function openModulPajakKIR() {
+        function openModulPajakKIR(targetView, targetParam) {
             // Guard hak akses: Staff Toko tidak berhak akses modul Pajak STNK & KIR
             const u = window.currentUser || (typeof currentUser !== 'undefined' ? currentUser : null);
             const role = (u && (u.role || u.jabatan || u.level) ? String(u.role || u.jabatan || u.level) : '').toLowerCase().trim();
@@ -61069,12 +61085,18 @@
             const modal = document.getElementById('modalTamaraPajakKIR');
             if (modal) {
                 modal.classList.remove('hidden');
+                modal.style.display = 'flex';
                 document.body.style.overflow = 'hidden';
             }
 
-            if (typeof openPajakSubView === 'function') {
+            if (targetView === 'detailKendaraan' && targetParam && typeof openDetailKendaraanPajak === 'function') {
+                try { openDetailKendaraanPajak(targetParam); } catch (e) { console.warn('openDetailKendaraanPajak warn:', e); }
+            } else if (targetView && typeof openPajakSubView === 'function') {
+                try { openPajakSubView(targetView, targetParam); } catch (e) { console.warn('openPajakSubView warn:', e); }
+            } else if (typeof openPajakSubView === 'function') {
                 try { openPajakSubView('beranda'); } catch (e) { console.warn('openPajakSubView warn:', e); }
             }
+
             if (typeof window.updatePajakClockWita === 'function') {
                 try { window.updatePajakClockWita(); } catch (e) {}
             }
@@ -61092,7 +61114,10 @@
 
         function closeModulPajakKIR() {
             const modal = document.getElementById('modalTamaraPajakKIR');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.removeProperty('display');
+            }
             document.body.style.overflow = '';
             document.documentElement.style.overflow = '';
         }
@@ -61475,7 +61500,11 @@
             galleryUrls = urls;
             galleryCurrentIndex = startIndex || 0;
             updateGalleryView();
-            document.getElementById('imagePreviewModal').classList.remove('hidden');
+            const mGallery = document.getElementById('imagePreviewModal');
+            if (mGallery) {
+                mGallery.classList.remove('hidden');
+                mGallery.style.display = 'flex';
+            }
         }
 
         function updateGalleryView() {
@@ -63461,8 +63490,10 @@
                     try { window.updatePajakClockWita(); } catch(err) {}
                 }
             } catch (e) {
-                const d = new Date();
-                if (clockEl) clockEl.innerText = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0') + ':' + d.getSeconds().toString().padStart(2, '0');
+                const utc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                const witaD = new Date(utc + (8 * 3600 * 1000));
+                const pad = n => String(n).padStart(2, '0');
+                if (clockEl) clockEl.innerText = pad(witaD.getHours()) + ':' + pad(witaD.getMinutes()) + ':' + pad(witaD.getSeconds());
                 if (typeof window.updatePajakClockWita === 'function') {
                     try { window.updatePajakClockWita(); } catch(err) {}
                 }
