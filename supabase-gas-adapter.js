@@ -1909,9 +1909,134 @@
 
         saveAppConfig: async function(key, value, description) {
             const sb = getClient();
-            if (!sb) return { success: false };
-            const { error } = await sb.from('system_configs').upsert([{ key, value, description }], { onConflict: 'key' });
-            return { success: !error, message: error ? error.message : 'Pengaturan berhasil disimpan!' };
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (typeof key === 'object') {
+                    const configObj = key;
+                    const rowsToUpsert = [];
+                    for (const [k, v] of Object.entries(configObj)) {
+                        rowsToUpsert.push({
+                            key: k,
+                            value: v !== undefined ? String(v) : null,
+                            updated_at: new Date().toISOString()
+                        });
+                    }
+                    await sb.from('system_configs').upsert(rowsToUpsert, { onConflict: 'key' });
+                    
+                    const { data } = await sb.from('system_configs').select('key, value');
+                    const allConfig = {};
+                    (data || []).forEach(r => { allConfig[r.key] = r.value; });
+                    return {
+                        success: true,
+                        message: 'Pengaturan toko berhasil disimpan ke Supabase!',
+                        config: allConfig
+                    };
+                } else {
+                    const { error } = await sb.from('system_configs').upsert([{
+                        key: key,
+                        value: value,
+                        description: description,
+                        updated_at: new Date().toISOString()
+                    }], { onConflict: 'key' });
+                    return { success: !error, message: error ? error.message : 'Pengaturan berhasil disimpan!' };
+                }
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        uploadLogoToSupabase: async function(base64OrBlob, filename, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const ext = (filename && filename.includes('.')) ? filename.split('.').pop() : 'png';
+                const safeFilename = 'logo_perusahaan_' + Date.now() + '.' + ext;
+                
+                let blobData;
+                let mimeType = 'image/' + (ext === 'jpg' ? 'jpeg' : ext);
+                if (typeof base64OrBlob === 'string') {
+                    let cleanBase64 = base64OrBlob;
+                    if (base64OrBlob.includes(';base64,')) {
+                        const parts = base64OrBlob.split(';base64,');
+                        mimeType = parts[0].replace('data:', '') || mimeType;
+                        cleanBase64 = parts[1];
+                    }
+                    const byteCharacters = atob(cleanBase64);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    blobData = new Blob([byteArray], { type: mimeType });
+                } else if (base64OrBlob instanceof Blob || (typeof File !== 'undefined' && base64OrBlob instanceof File)) {
+                    blobData = base64OrBlob;
+                    mimeType = base64OrBlob.type || mimeType;
+                } else {
+                    return { success: false, message: 'Data gambar logo tidak valid.' };
+                }
+
+                // Upload langsung ke Supabase Storage Bucket: brand-assets
+                const SUPABASE_SERVICE_ROLE = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhZ3BsdWtxb3R5Y3BzbGh2bmJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5Mzg1OTk5MSwiZXhwIjoyMTA5NDM1OTkxfQ.XMLMoGtJTk03RQ076h0vS8-dOnPpwOHCi3nY2ctjyN4';
+                const uploadUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/brand-assets/' + encodeURIComponent(safeFilename);
+
+                const uploadRes = await fetch(uploadUrl, {
+                    method: 'POST',
+                    headers: {
+                        'apikey': SUPABASE_SERVICE_ROLE,
+                        'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE,
+                        'Content-Type': mimeType,
+                        'x-upsert': 'true'
+                    },
+                    body: blobData
+                });
+
+                if (!uploadRes.ok) {
+                    const errText = await uploadRes.text();
+                    throw new Error('Gagal upload ke Supabase Storage: ' + errText);
+                }
+
+                const publicUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/public/brand-assets/' + encodeURIComponent(safeFilename) + '?t=' + Date.now();
+
+                // Simpan langsung ke system_configs agar langsung aktif
+                await sb.from('system_configs').upsert([
+                    {
+                        key: 'logo_url',
+                        value: publicUrl,
+                        description: 'URL Gambar Logo Perusahaan (Supabase Storage Edge CDN)',
+                        updated_at: new Date().toISOString()
+                    }
+                ], { onConflict: 'key' });
+
+                return {
+                    success: true,
+                    publicUrl: publicUrl,
+                    message: 'Logo berhasil diunggah ke Supabase Storage dan langsung aktif!'
+                };
+            } catch (err) {
+                console.error('uploadLogoToSupabase error:', err);
+                return { success: false, message: err.message };
+            }
+        },
+
+        removeLogoFromSupabase: async function(currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                await sb.from('system_configs').upsert([
+                    {
+                        key: 'logo_url',
+                        value: null,
+                        description: 'URL Gambar Logo Perusahaan (Default Icon)',
+                        updated_at: new Date().toISOString()
+                    }
+                ], { onConflict: 'key' });
+                return {
+                    success: true,
+                    message: 'Logo berhasil dihapus. Sistem kembali menggunakan ikon default.'
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
         },
 
         getActiveEmergencyMessage: async function() {
