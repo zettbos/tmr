@@ -2899,6 +2899,34 @@
             }
         },
 
+        respondBulkIzinIsiBBM: async function(idIzinList, action, userAdminNama, catatan) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                if (!Array.isArray(idIzinList) || idIzinList.length === 0) {
+                    return { success: false, message: 'Daftar ID izin kosong' };
+                }
+                const isApprove = (action === 'APPROVE' || action === 'DISETUJUI' || action === 'SETUJU');
+                const statusText = isApprove ? 'DISETUJUI' : 'DITOLAK';
+
+                const { error } = await sb.from('fuel_approvals').update({
+                    status: statusText,
+                    responded_by: userAdminNama || 'Admin',
+                    responded_at: new Date().toISOString(),
+                    notes: catatan || null
+                }).in('id', idIzinList);
+
+                if (error) return { success: false, message: error.message };
+                return { 
+                    success: true, 
+                    count: idIzinList.length, 
+                    message: `${idIzinList.length} permohonan BBM berhasil ${isApprove ? 'disetujui' : 'ditolak'}.` 
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
         // --- BBM TRANSACTIONS (CRUD) ---
         submitPengisianBBM: async function(payload, base64Km, base64Struk, base64Muatan, currentUser, base64Muatan2) {
             const sb = getClient();
@@ -6689,9 +6717,23 @@
                 const userRole = (u.role || '').toLowerCase();
                 const userName = (u.nama || u.full_name || '').toLowerCase();
                 const now = new Date();
-                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
-                const wita = new Date(nowUtc + (8 * 3600 * 1000));
-                const todayStr = wita.toISOString().slice(0, 10);
+                let todayStr = '';
+                try {
+                    const dtf = new Intl.DateTimeFormat('en-GB', {
+                        timeZone: 'Asia/Makassar',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    });
+                    const parts = dtf.formatToParts(now);
+                    const p = {};
+                    parts.forEach(part => { p[part.type] = part.value; });
+                    todayStr = `${p.year}-${p.month}-${p.day}`;
+                } catch(eDate) {
+                    const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                    const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                    todayStr = `${wita.getFullYear()}-${String(wita.getMonth() + 1).padStart(2, '0')}-${String(wita.getDate()).padStart(2, '0')}`;
+                }
 
                 // 1. Ambil SOP master yang statusnya Aktif / Terjadwal
                 const { data: masters, error: mErr } = await sb.from('sop_masters')

@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.2.0"></script>
+    <script src="./supabase-gas-adapter.js?v=6.3.1"></script>
 
 </head>
 
@@ -10611,63 +10611,34 @@
 </div>
 
 <!-- ======================================================== -->
-<!-- 3. MODAL BBM TAHAP 4: ADMIN / STAFF OPS - KONFIRMASI IZIN -->
-<!-- (SESUAI GAMBAR 2 BAGIAN 2)                                -->
+<!-- 3. MODAL BBM TAHAP 4: ADMIN / OWNER - KONFIRMASI IZIN   -->
+<!-- (MULTI-APPROVAL STACK & BULK ACTIONS DENGAN SNOOZE)       -->
 <!-- ======================================================== -->
 <div id="modalAdminConfirmBBM"
     class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[130] hidden flex items-center justify-center p-3 sm:p-4 select-none">
     <div
-        class="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200 relative animate-scale-up">
+        class="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-200 relative animate-scale-up flex flex-col max-h-[90vh]">
 
-        <!-- HEADER BAR NAVY SESUAI GAMBAR 2 -->
-        <div class="bg-[#1955CD] px-5 py-3.5 flex items-center justify-between text-white">
-            <div class="flex items-center space-x-2">
+        <!-- HEADER BAR NAVY DENGAN BADGE & TOMBOL CLOSE (X) -->
+        <div class="bg-[#1955CD] px-4 sm:px-5 py-3.5 flex items-center justify-between text-white shrink-0">
+            <div class="flex items-center space-x-2 min-w-0">
                 <i class="fa-solid fa-gas-pump text-amber-400 text-base"></i>
-                <span class="font-black text-xs sm:text-sm tracking-wide uppercase">NOTIFIKASI IZIN PENGISIAN</span>
+                <span class="font-black text-xs sm:text-sm tracking-wide uppercase truncate">NOTIFIKASI IZIN PENGISIAN</span>
+                <span id="adminConfirmBadgeText"
+                    class="bg-red-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-xs animate-pulse">1</span>
             </div>
-            <!-- LONCENG DENGAN BADGE MERAH 1 -->
-            <div class="relative flex items-center justify-center">
-                <i class="fa-solid fa-bell text-lg text-white"></i>
-                <span
-                    class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-600 text-white text-[9px] font-black flex items-center justify-center shadow-xs animate-bounce">1</span>
+            
+            <div class="flex items-center space-x-1.5 shrink-0">
+                <button type="button" onclick="handleAdminSnoozeBBM()" title="Tutup / Ingatkan Nanti"
+                    class="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition active:scale-95 cursor-pointer text-xs">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
             </div>
         </div>
 
-        <!-- BODY CARD -->
-        <div class="p-5 sm:p-6 space-y-4 text-center">
-            <div class="space-y-2">
-                <p class="text-sm sm:text-base font-extrabold text-slate-800 leading-relaxed text-left">
-                    Sopir ini (a/n <span id="adminConfirmDriverName" class="text-blue-600 font-black">SOPIR</span>)
-                    ingin melakukan pengisian bahan bakar solar/bensin.
-                </p>
-
-                <div
-                    class="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700">
-                    <span class="text-slate-500">Armada Mobil:</span>
-                    <span id="adminConfirmNoPlat"
-                        class="font-black text-slate-900 bg-white px-2.5 py-1 rounded-xl border border-slate-200 text-xs">-</span>
-                </div>
-                <div id="adminConfirmTimeTxt" class="text-[11px] font-semibold text-slate-400 text-left">
-                    Waktu Permohonan: -
-                </div>
-            </div>
-
-            <!-- PERTANYAAN: APAKAH DI SETUJUI? -->
-            <div class="pt-1">
-                <h4 class="text-sm sm:text-base font-black text-slate-900">Apakah di setujui?</h4>
-            </div>
-
-            <!-- DUA TOMBOL AKSI SEJAJAR: TIDAK (PUTIH) vs IYA, SETUJU (HIJAU EMERALD) -->
-            <div class="flex items-center gap-3 pt-1">
-                <button type="button" onclick="handleAdminRespondBBM('DITOLAK')"
-                    class="w-1/2 py-3 bg-white border-2 border-slate-800 hover:bg-slate-50 text-slate-900 font-black rounded-2xl text-xs sm:text-sm transition cursor-pointer shadow-xs active:scale-95">
-                    TIDAK
-                </button>
-                <button type="button" id="btnAdminSetujuBbm" onclick="handleAdminRespondBBM('DISETUJUI')"
-                    class="w-1/2 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl text-xs sm:text-sm shadow-md shadow-emerald-600/30 transition cursor-pointer active:scale-95 flex items-center justify-center space-x-1.5">
-                    <span>IYA, SETUJU</span>
-                </button>
-            </div>
+        <!-- DYNAMIC BODY CONTAINER (SINGLE CARD vs MULTI-ITEM STACK) -->
+        <div id="adminConfirmBbmDynamicContainer" class="p-4 sm:p-6 overflow-y-auto custom-scrollbar flex-1 space-y-4">
+            <!-- Dynamically populated via renderAdminPendingBbmUi() -->
         </div>
     </div>
 </div>
@@ -16198,7 +16169,24 @@
         }
     }
 
+    window.currentAdminPendingBbmList = [];
+    window.adminBbmSnoozedUntilRefresh = false;
+
+    function handleAdminSnoozeBBM() {
+        window.adminBbmSnoozedUntilRefresh = true;
+        const mConfirm = document.getElementById('modalAdminConfirmBBM');
+        if (mConfirm && !mConfirm.classList.contains('hidden')) {
+            mConfirm.classList.add('hidden');
+        }
+        showToast('Notifikasi izin BBM ditunda. Akan diingatkan kembali saat Anda me-refresh halaman.', 'info');
+    }
+    window.handleAdminSnoozeBBM = handleAdminSnoozeBBM;
+
     function handleAdminPendingBBMList(res) {
+        if (window.adminBbmSnoozedUntilRefresh) {
+            return; // Owner/Admin memilih untuk menunda sesi ini
+        }
+
         let items = [];
         if (Array.isArray(res)) {
             items = res;
@@ -16208,86 +16196,237 @@
             items = Array.isArray(res.bbm) ? res.bbm : (res.bbm.data || []);
         }
 
-        if (items.length > 0) {
-            const pending = items[0];
-            if (window.lastAdminDismissedIzin !== pending.idIzin) {
-                window.currentAdminPendingIdIzin = pending.idIzin;
-                window.currentAdminPendingDriverName = pending.namaSopir;
-
-                const nameEl = document.getElementById('adminConfirmDriverName');
-                const platEl = document.getElementById('adminConfirmNoPlat');
-                const timeEl = document.getElementById('adminConfirmTimeTxt');
-
-                if (nameEl) nameEl.innerText = pending.namaSopir || 'Sopir';
-
-                // TAHAP 2: Armada mobil muncul sesuai mobil & plat yang dimasukkan sopir (Gambar 2)
-                let displayArmada = pending.noPlat || '-';
-                if (window.masterKendaraanList && pending.noPlat) {
-                    const kMatch = window.masterKendaraanList.find(function (k) {
-                        return (k.no_plat || '').toUpperCase().trim() === pending.noPlat.toUpperCase().trim();
-                    });
-                    if (kMatch && kMatch.jenis_mobil) {
-                        displayArmada = kMatch.no_plat + ' (' + kMatch.jenis_mobil + ')';
-                    }
-                }
-                if (platEl) platEl.innerText = displayArmada;
-
-                // TAHAP 2: Format waktu WITA bersih tanpa WIB / GMT+0700 (Gambar 2)
-                const formattedTime = (typeof formatWitaDateTime === 'function')
-                    ? formatWitaDateTime(pending.tanggalJam)
-                    : (pending.tanggalJam || '-');
-                if (timeEl) timeEl.innerText = 'Waktu Permohonan: ' + formattedTime;
-
-                const mConfirm = document.getElementById('modalAdminConfirmBBM');
-                if (mConfirm && mConfirm.classList.contains('hidden')) {
-                    mConfirm.classList.remove('hidden');
-                    playApprovalChime('notify');
-                }
-            }
-        } else {
-            const mConfirm = document.getElementById('modalAdminConfirmBBM');
-            if (mConfirm && !mConfirm.classList.contains('hidden')) {
-                mConfirm.classList.add('hidden');
-            }
-        }
+        window.currentAdminPendingBbmList = items || [];
+        renderAdminPendingBbmUi();
     }
     window.handleAdminPendingBBMList = handleAdminPendingBBMList;
 
-    function handleAdminRespondBBM(action) {
-        if (!window.currentAdminPendingIdIzin) {
-            closeModal('modalAdminConfirmBBM');
+    function renderAdminPendingBbmUi() {
+        const mConfirm = document.getElementById('modalAdminConfirmBBM');
+        const container = document.getElementById('adminConfirmBbmDynamicContainer');
+        const badgeEl = document.getElementById('adminConfirmBadgeText');
+        const items = window.currentAdminPendingBbmList || [];
+
+        if (!container || !mConfirm) return;
+
+        if (items.length === 0) {
+            if (!mConfirm.classList.contains('hidden')) {
+                mConfirm.classList.add('hidden');
+            }
             return;
         }
 
-        const idIzin = window.currentAdminPendingIdIzin;
-        const driverName = window.currentAdminPendingDriverName || 'Sopir';
-        const isApprove = (action === 'DISETUJUI');
+        if (badgeEl) {
+            badgeEl.innerText = items.length > 1 ? (items.length + ' Menunggu') : '1';
+        }
 
-        closeModal('modalAdminConfirmBBM');
-        window.lastAdminDismissedIzin = idIzin;
-
-        showToast('Memproses ' + (isApprove ? 'persetujuan' : 'penolakan') + '...', 'info');
-
-        if (typeof google !== 'undefined' && google.script && google.script.run) {
-            google.script.run.withSuccessHandler(function (res) {
-                if (res && res.success) {
-                    showToast('Permintaan BBM a/n ' + driverName + ' berhasil di-' + (isApprove ? 'setujui' : 'tolak') + '!', 'success');
-                    if (isApprove) playApprovalChime('approve');
-                    else playApprovalChime('reject');
-                } else {
-                    showToast('Gagal merespon: ' + (res ? res.message : 'Error'), 'error');
+        const resolveArmada = function(noPlat) {
+            let displayArmada = (noPlat || '').trim();
+            if (window.masterKendaraanList && displayArmada) {
+                const kMatch = window.masterKendaraanList.find(function(k) {
+                    return (k.no_plat || '').toUpperCase().trim() === displayArmada.toUpperCase().trim();
+                });
+                if (kMatch && kMatch.jenis_mobil) {
+                    return kMatch.no_plat + ' (' + kMatch.jenis_mobil + ')';
                 }
-            }).withFailureHandler(function (err) {
-                showToast('Gagal memproses respon: ' + err.toString(), 'error');
-            }).respondIzinIsiBBM(idIzin, action, currentUser ? currentUser.nama : 'Admin', '');
-        } else {
-            if (window.mockActiveBbmState) {
-                window.mockActiveBbmState.status = isApprove ? 'DISETUJUI' : 'DITOLAK';
-                window.mockActiveBbmState.ditanggapiOleh = currentUser ? currentUser.nama : 'Admin';
             }
-            showToast('Permintaan BBM a/n ' + driverName + ' berhasil di-' + (isApprove ? 'setujui' : 'tolak') + ' (Mock)!', 'success');
+            return displayArmada || '-';
+        };
+
+        const formatTime = function(tStr) {
+            return (typeof formatWitaDateTime === 'function') ? formatWitaDateTime(tStr) : (tStr || '-');
+        };
+
+        if (items.length === 1) {
+            // ==========================================
+            // KONDISI 1: SINGLE CARD VIEW (1 PERMOHONAN)
+            // ==========================================
+            const p = items[0];
+            const armadaText = resolveArmada(p.noPlat);
+            const timeText = formatTime(p.tanggalJam);
+            const driverName = p.namaSopir || 'Sopir';
+
+            container.innerHTML = 
+                '<div class="space-y-4 text-center">' +
+                '    <div class="space-y-2.5 text-left">' +
+                '        <p class="text-sm sm:text-base font-extrabold text-slate-800 leading-relaxed">' +
+                '            Sopir ini (a/n <span class="text-blue-600 font-black">' + escapeHtml(driverName) + '</span>) ingin melakukan pengisian bahan bakar solar/bensin.' +
+                '        </p>' +
+                '        <div class="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-700 shadow-2xs">' +
+                '            <span class="text-slate-500 font-semibold">Armada Mobil:</span>' +
+                '            <span class="font-black text-slate-900 bg-white px-2.5 py-1 rounded-xl border border-slate-200 text-xs shadow-2xs">' + escapeHtml(armadaText) + '</span>' +
+                '        </div>' +
+                '        <div class="text-[11px] font-semibold text-slate-400 flex items-center space-x-1.5">' +
+                '            <i class="fa-regular fa-clock text-slate-400"></i>' +
+                '            <span>Waktu Permohonan: ' + escapeHtml(timeText) + '</span>' +
+                '        </div>' +
+                '    </div>' +
+                '    <div class="pt-1">' +
+                '        <h4 class="text-sm sm:text-base font-black text-slate-900">Apakah disetujui?</h4>' +
+                '    </div>' +
+                '    <div class="flex items-center gap-3 pt-1">' +
+                '        <button type="button" onclick="handleAdminSingleCardRespond(\'' + escapeHtml(p.idIzin) + '\', \'DITOLAK\')" class="w-1/2 py-3 bg-white border-2 border-slate-800 hover:bg-slate-100 text-slate-900 font-black rounded-2xl text-xs sm:text-sm transition cursor-pointer shadow-xs active:scale-95">' +
+                '            TIDAK' +
+                '        </button>' +
+                '        <button type="button" onclick="handleAdminSingleCardRespond(\'' + escapeHtml(p.idIzin) + '\', \'DISETUJUI\')" class="w-1/2 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl text-xs sm:text-sm shadow-md shadow-emerald-600/30 transition cursor-pointer active:scale-95 flex items-center justify-center space-x-1.5">' +
+                '            <i class="fa-solid fa-check text-xs"></i>' +
+                '            <span>IYA, SETUJU</span>' +
+                '        </button>' +
+                '    </div>' +
+                '    <div class="pt-1 text-center">' +
+                '        <button type="button" onclick="handleAdminSnoozeBBM()" class="inline-flex items-center space-x-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition cursor-pointer py-1 px-3 rounded-lg hover:bg-slate-100">' +
+                '            <i class="fa-regular fa-bell-slash text-[11px]"></i>' +
+                '            <span>Ingatkan Nanti (Tutup Sementara)</span>' +
+                '        </button>' +
+                '    </div>' +
+                '</div>';
+        } else {
+            // ==========================================
+            // KONDISI 2: MULTI-ITEM STACK VIEW (>1)
+            // ==========================================
+            let cardsHtml = '';
+            items.forEach((p, idx) => {
+                const armadaText = resolveArmada(p.noPlat);
+                const timeText = formatTime(p.tanggalJam);
+                const driverName = p.namaSopir || 'Sopir';
+
+                cardsHtml += 
+                    '<div id="adminBbmCard_' + escapeHtml(p.idIzin) + '" class="p-3.5 bg-slate-50 border border-slate-200/90 rounded-2xl space-y-2.5 transition hover:border-blue-300 card-shadow">' +
+                    '    <div class="flex items-start justify-between gap-2">' +
+                    '        <div class="flex items-center space-x-2.5 min-w-0">' +
+                    '            <div class="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-black text-xs shrink-0">' +
+                    '                ' + (idx + 1) +
+                    '            </div>' +
+                    '            <div class="min-w-0">' +
+                    '                <h5 class="text-xs sm:text-sm font-black text-slate-900 truncate">' + escapeHtml(driverName) + '</h5>' +
+                    '                <p class="text-[10.5px] font-semibold text-slate-500 flex items-center space-x-1">' +
+                    '                    <i class="fa-solid fa-truck-moving text-[10px] text-slate-400"></i>' +
+                    '                    <span class="truncate">' + escapeHtml(armadaText) + '</span>' +
+                    '                </p>' +
+                    '            </div>' +
+                    '        </div>' +
+                    '        <div class="text-right shrink-0">' +
+                    '            <span class="text-[9.5px] font-bold text-slate-400 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-2xs">' + escapeHtml(timeText) + '</span>' +
+                    '        </div>' +
+                    '    </div>' +
+                    '    <div class="flex items-center justify-end gap-2 pt-1 border-t border-slate-200/60">' +
+                    '        <button type="button" onclick="handleAdminSingleCardRespond(\'' + escapeHtml(p.idIzin) + '\', \'DITOLAK\')" class="py-1.5 px-3 bg-white border border-rose-300 hover:bg-rose-50 text-rose-600 font-black rounded-xl text-[11px] transition cursor-pointer active:scale-95 flex items-center space-x-1">' +
+                    '            <i class="fa-solid fa-xmark text-[10px]"></i>' +
+                    '            <span>Tolak</span>' +
+                    '        </button>' +
+                    '        <button type="button" onclick="handleAdminSingleCardRespond(\'' + escapeHtml(p.idIzin) + '\', \'DISETUJUI\')" class="py-1.5 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-[11px] shadow-xs transition cursor-pointer active:scale-95 flex items-center space-x-1">' +
+                    '            <i class="fa-solid fa-check text-[10px]"></i>' +
+                    '            <span>Setujui</span>' +
+                    '        </button>' +
+                    '    </div>' +
+                    '</div>';
+            });
+
+            container.innerHTML = 
+                '<div class="space-y-3.5">' +
+                '    <div class="flex items-center justify-between">' +
+                '        <p class="text-xs sm:text-sm font-extrabold text-slate-800">' +
+                '            Ada <span class="text-blue-600 font-black">' + items.length + ' permohonan BBM</span> menunggu persetujuan Anda:' +
+                '        </p>' +
+                '    </div>' +
+                '    <div class="space-y-2.5 max-h-[48vh] overflow-y-auto custom-scrollbar pr-1">' +
+                cardsHtml +
+                '    </div>' +
+                '    <div class="pt-2 border-t border-slate-200 space-y-2">' +
+                '        <button type="button" onclick="handleAdminBulkRespondBBM(\'DISETUJUI\')" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl text-xs sm:text-sm shadow-md shadow-emerald-600/30 transition cursor-pointer active:scale-95 flex items-center justify-center space-x-2">' +
+                '            <i class="fa-solid fa-check-double text-sm"></i>' +
+                '            <span>SETUJUI SEMUA (' + items.length + ')</span>' +
+                '        </button>' +
+                '        <div class="flex items-center gap-2">' +
+                '            <button type="button" onclick="handleAdminBulkRespondBBM(\'DITOLAK\')" class="w-1/2 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-600 font-black rounded-xl text-xs transition cursor-pointer active:scale-95 flex items-center justify-center space-x-1">' +
+                '                <i class="fa-solid fa-ban text-[11px]"></i>' +
+                '                <span>Tolak Semua (' + items.length + ')</span>' +
+                '            </button>' +
+                '            <button type="button" onclick="handleAdminSnoozeBBM()" class="w-1/2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-xs transition cursor-pointer active:scale-95 flex items-center justify-center space-x-1">' +
+                '                <i class="fa-regular fa-clock text-[11px]"></i>' +
+                '                <span>Ingatkan Nanti</span>' +
+                '            </button>' +
+                '        </div>' +
+                '    </div>' +
+                '</div>';
+        }
+
+        if (mConfirm.classList.contains('hidden')) {
+            mConfirm.classList.remove('hidden');
+            if (typeof playApprovalChime === 'function') {
+                playApprovalChime('notify');
+            }
         }
     }
+    window.renderAdminPendingBbmUi = renderAdminPendingBbmUi;
+
+    function handleAdminSingleCardRespond(idIzin, action) {
+        if (!idIzin) return;
+        const isApprove = (action === 'APPROVE' || action === 'DISETUJUI' || action === 'SETUJU');
+        const actionText = isApprove ? 'DISETUJUI' : 'DITOLAK';
+        const item = (window.currentAdminPendingBbmList || []).find(i => i && i.idIzin === idIzin);
+        const driverName = item ? (item.namaSopir || 'Sopir') : 'Sopir';
+
+        // Optimistic UI: hapus item langsung dari list lokal
+        window.currentAdminPendingBbmList = (window.currentAdminPendingBbmList || []).filter(i => i && i.idIzin !== idIzin);
+        renderAdminPendingBbmUi();
+
+        showToast('Memproses izin a/n ' + driverName + ' (' + (isApprove ? 'Disetujui' : 'Ditolak') + ')...', 'info');
+
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run
+                .withSuccessHandler(function(res) {
+                    if (res && res.success) {
+                        showToast('Izin BBM a/n ' + driverName + ' berhasil di-' + (isApprove ? 'setujui' : 'tolak') + '!', 'success');
+                        if (typeof playApprovalChime === 'function') playApprovalChime(isApprove ? 'approve' : 'reject');
+                    } else {
+                        showToast('Gagal merespon: ' + (res ? res.message : 'Error'), 'error');
+                    }
+                })
+                .withFailureHandler(function(err) {
+                    showToast('Gagal memproses respon: ' + err.toString(), 'error');
+                })
+                .respondIzinIsiBBM(idIzin, actionText, currentUser ? currentUser.nama : 'Admin', '');
+        }
+    }
+    window.handleAdminSingleCardRespond = handleAdminSingleCardRespond;
+
+    function handleAdminBulkRespondBBM(action) {
+        const items = window.currentAdminPendingBbmList || [];
+        if (items.length === 0) {
+            handleAdminSnoozeBBM();
+            return;
+        }
+
+        const isApprove = (action === 'APPROVE' || action === 'DISETUJUI' || action === 'SETUJU');
+        const actionText = isApprove ? 'DISETUJUI' : 'DITOLAK';
+        const idList = items.map(i => i.idIzin).filter(Boolean);
+        const total = idList.length;
+
+        // Optimistic UI: tutup modal dan bersihkan antrian
+        window.currentAdminPendingBbmList = [];
+        const mConfirm = document.getElementById('modalAdminConfirmBBM');
+        if (mConfirm) mConfirm.classList.add('hidden');
+
+        showToast('Memproses ' + total + ' permohonan BBM sekaligus...', 'info');
+
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run
+                .withSuccessHandler(function(res) {
+                    if (res && res.success) {
+                        showToast(total + ' Permohonan BBM berhasil di-' + (isApprove ? 'setujui' : 'tolak') + ' massal!', 'success');
+                        if (typeof playApprovalChime === 'function') playApprovalChime(isApprove ? 'approve' : 'reject');
+                    } else {
+                        showToast('Gagal respon massal: ' + (res ? res.message : 'Error'), 'error');
+                    }
+                })
+                .withFailureHandler(function(err) {
+                    showToast('Gagal memproses respon massal: ' + err.toString(), 'error');
+                })
+                .respondBulkIzinIsiBBM(idList, actionText, currentUser ? currentUser.nama : 'Admin', '');
+        }
+    }
+    window.handleAdminBulkRespondBBM = handleAdminBulkRespondBBM;
 
     // ==========================================
     // 4. TAHAP 5: DASHBOARD MONITORING KENDARAAN
@@ -50649,7 +50788,9 @@
             return false;
         }
 
-        console.log('[SOP Midnight Reset] 🔄 Menjalankan Reset Otomatis Jam 00:00 WITA untuk tanggal:', todayDateKey, '(Reset sebelumnya:', lastResetKey || 'belum ada', ')');
+        if (window.__TB_DEBUG) {
+            console.log('[SOP Midnight Reset] 🔄 Menjalankan Reset Otomatis Jam 00:00 WITA untuk tanggal:', todayDateKey, '(Reset sebelumnya:', lastResetKey || 'belum ada', ')');
+        }
         
         window._sopLastMidnightResetDateKey = todayDateKey;
         try {
@@ -63265,7 +63406,9 @@
             if (!u) return;
             const nowTs = Date.now();
 
-            const tKey = res.today_date_key || (typeof window.getTodayWitaDateKey === 'function' ? window.getTodayWitaDateKey() : new Date().toISOString().slice(0, 10));
+            const tKey = (typeof window.getTodayWitaDateKey === 'function') 
+                ? window.getTodayWitaDateKey() 
+                : (res.today_date_key || new Date().toISOString().slice(0, 10));
 
             // REVISI TAHAP 4 (GAMBAR 3): SIKLUS OTOMATIS RESET 00:00 WITA SOP BERULANG TIAP HARI
             if (typeof window.checkAndPerformMidnightReset === 'function') {

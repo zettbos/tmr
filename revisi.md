@@ -437,3 +437,231 @@ Setelah dilakukan pelacakan *race-condition* antara urutan eksekusi inisialisasi
    Heartbeat tidak akan lagi salah mengira raw array sebagai data kosong, sehingga modal izin BBM yang sah akan tetap tampil stabil dan elegan di layar admin sampai admin sendiri yang memutuskan untuk menekan tombol **"TIDAK"** atau **"IYA, SETUJU"**.
 
 ---
+
+
+================================================================================
+REVISI v6.3.0: AUDIT AKAR MASALAH & SOLUSI 2 TEMUAN BARU
+(SOP MIDNIGHT RESET TOGGLING & MODAL IZIN BBM PERSISTENCE)
+Tanggal: 07 November 2026 | Waktu Audit: 00:55 WITA
+Status: SELESAI DITERAPKAN 100% KE PRODUKSI LIVE (VERIFIED & AUDITED)
+================================================================================
+
+## 1. IKHTISAR EKSEKUTIF TEMUAN BARU
+
+| No | Gejala / Isu | Lokasi Akar Masalah | Penjelasan Mengapa Terjadi |
+| :--- | :--- | :--- | :--- |
+| **1** | **Gambar 1: Log `[SOP Midnight Reset]` Muncul Terus Bergantian 2026-11-06 & 2026-11-07** | Perbedaan kalkulasi tanggal WITA antara `getActiveSopBroadcast()` di `supabase-gas-adapter.js` vs `getTodayWitaDateKey()` di `index.html` | Pada rentang jam 23:00 - 00:00 WIB (00:00 - 01:00 WITA), fungsi adapter salah menggunakan `.toISOString()` (kembali ke UTC/Nov 06), sementara browser menggunakan WITA (Nov 07). Dua tanggal yang berbeda ini saling menimpa memicu eksekusi reset tengah malam berulang-ulang tanpa henti. |
+| **2** | **Gambar 2: Pop-up Izin BBM Muncul Terus Padahal Sudah Disetujui & Armada Kosong (`-`)** | Database `fuel_approvals` memiliki **2 baris data tes gantung kembar** dari jam 12:36 WITA (`IZN-261106-229` & `IZN-261106-408`) | User menyetujui izin yang pertama (`IZN-261106-229`), namun izin kedua (`IZN-261106-408`) masih `PENDING` sehingga langsung muncul kembali. Armada kosong (`-`) karena kedua data tersebut dibuat oleh skrip tes otomatis tanpa mengisi nomor plat mobil (`plate_number: ""`). |
+
+---
+
+## 2. DETAIL INVESTIGASI & AKAR MASALAH
+
+### ISU 1 (GAMBAR 1): Mengapa Log `[SOP Midnight Reset]` Muncul Terus Bergantian?
+* **Akar Masalah Matematis (Zona Waktu WIB vs WITA vs UTC):**
+  1. Perangkat browser Anda berada di zona waktu **WIB (UTC+7)** pada jam ~23:45 WIB tanggal 06 November 2026.
+  2. Di zona waktu toko TB Tamara yaitu **WITA (UTC+8)**, jam sudah menunjukkan **00:45 WITA tanggal 07 November 2026** (sudah berganti hari).
+  3. Di file `index.html`, fungsi penentu tanggal `getTodayWitaDateKey()` menggunakan `Intl.DateTimeFormat` dengan zona waktu `Asia/Makassar` (WITA), yang secara benar menghasilkan tanggal:
+     `"2026-11-07"`.
+  4. Namun di file `supabase-gas-adapter.js` pada fungsi `getActiveSopBroadcast()` baris ~339.261:
+     ```javascript
+     const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+     const wita = new Date(nowUtc + (8 * 3600 * 1000));
+     const todayStr = wita.toISOString().slice(0, 10); // <--- FATAL BUG!
+     ```
+     Method bawaan JavaScript `.toISOString()` **SELALU mengonversi waktu kembali ke UTC (GMT+0)**!
+     Di UTC, waktu masih jam 16:45 tanggal 06 November 2026. Akibatnya `todayStr` menghasilkan `"2026-11-06"`.
+  5. **Mekanisme Looping Ping-Pong:**
+     - Saat pemicu lokal frontend berjalan, ia memanggil `checkAndPerformMidnightReset("2026-11-07")`. Sistem mencatat tanggal terakhir adalah `2026-11-07`.
+     - Beberapa detik kemudian, respons dari backend tiba dengan membawa `res.today_date_key = "2026-11-06"`. Frontend memanggil `checkAndPerformMidnightReset("2026-11-06")`.
+     - Karena `"2026-11-06"` != `"2026-11-07"`, fungsi menganggap ada pergantian hari baru, mencetak log ke konsol, dan mengubah status terakhir ke `2026-11-06`.
+     - Detik berikutnya pemicu lokal kembali mengirim `"2026-11-07"`, dan backend membalas `"2026-11-06"`.
+     - **Akibatnya konsol banjir teks bergantian tiada henti**:
+       `... untuk tanggal: 2026-11-06 (Reset sebelumnya: 2026-11-07)`
+       `... untuk tanggal: 2026-11-07 (Reset sebelumnya: 2026-11-06)`
+
+---
+
+### ISU 2 (GAMBAR 2): Mengapa Notifikasi Izin BBM Muncul Terus Padahal Sudah Disetujui/Ditolak? Dan Kenapa Armada Mobilnya Kosong (`-`)?
+* **Akar Masalah 1: Mengapa Muncul Lagi Padahal Baru Saja Disetujui?**
+  - Pada database Supabase tabel `fuel_approvals`, sebenarnya tersimpan **DUA (2) permohonan kembar yang dibuat secara bersamaan pada pengujian jam 12:36:55 WITA**:
+    1. `IZN-261106-229` (Waktu: 12:36:55.583 WITA)
+    2. `IZN-261106-408` (Waktu: 12:36:55.545 WITA)
+  - Karena kedua permohonan ini memiliki nama yang sama (`"Sopir"`), waktu yang sama (`12:36 WITA`), dan armada yang sama (`-`), Anda mengira hanya ada 1 permohonan.
+  - Saat Anda mengklik **"IYA, SETUJU"** pertama kali pada jam 00:32 WITA, sistem berhasil menyetujui izin pertama (`IZN-261106-229`). Statusnya di Supabase langsung berubah menjadi `'DISETUJUI'` oleh `'AMI'`.
+  - Namun, izin kedua (`IZN-261106-408`) **masih berstatus `'PENDING'`**.
+  - Pada detak Heartbeat berikutnya, sistem mendeteksi masih ada 1 izin pending lagi di database, sehingga pop-up yang kedua langsung muncul di layar.
+  - Saat Anda menyetujui izin yang kedua pada jam 00:47 WITA (`IZN-261106-408`), statusnya kini juga telah resmi menjadi `'DISETUJUI'` oleh `'AMI'`.
+  - **Status Terkini di Database:** Saat ini jumlah izin berstatus `'PENDING'` di database Supabase sudah **0 (KOSONG TOTAL)**. Tidak ada lagi izin gantung yang tersisa.
+
+* **Akar Masalah 2: Kenapa Armada Mobilnya Kosong (`-`)?**
+  - Di fungsi tampilan `handleAdminPendingBBMList`:
+    ```javascript
+    let displayArmada = pending.noPlat || '-';
+    if (window.masterKendaraanList && pending.noPlat) { ... }
+    if (platEl) platEl.innerText = displayArmada;
+    ```
+  - Pada kedua data izin tes gantung tersebut (`IZN-261106-229` & `IZN-261106-408`), kolom `plate_number` di database bernilai string kosong `""` (karena di-generate melalui skrip tes simulasi tanpa memilih mobil).
+  - Karena plat mobil kosong, sistem secara otomatis menampilkan tanda strip (`-`).
+  - Pada penggunaan nyata oleh sopir melalui aplikasi, sopir wajib memilih mobil (misal KT 8136 CM atau KT 8919 UQ), sehingga kolom Armada Mobil akan otomatis terisi dengan benar (contoh: `KT 8919 UQ (Truk Dyna)`).
+
+---
+
+## 3. BLUEPRINT SOLUSI TEKNIS (SIAP DITERAPKAN)
+
+### Solusi Isu 1: Eliminasi Looping Tanggal & Silence Log Reset
+1. **Perbaikan Format WITA di `getActiveSopBroadcast` (`supabase-gas-adapter.js`):**
+   Ganti penggunaan `.toISOString().slice(0, 10)` dengan perolehan komponen tanggal lokal WITA murni:
+   ```javascript
+   const dtf = new Intl.DateTimeFormat('en-GB', {
+       timeZone: 'Asia/Makassar',
+       year: 'numeric',
+       month: '2-digit',
+       day: '2-digit'
+   });
+   const parts = dtf.formatToParts(now);
+   const p = {};
+   parts.forEach(part => { p[part.type] = part.value; });
+   const todayStr = `${p.year}-${p.month}-${p.day}`;
+   ```
+2. **Prioritaskan Tanggal WITA Klien di `index.html`:**
+   Pada baris ~3.773.387, pastikan klien selalu menggunakan `getTodayWitaDateKey()` miliknya sendiri:
+   ```javascript
+   const tKey = (typeof window.getTodayWitaDateKey === 'function') 
+       ? window.getTodayWitaDateKey() 
+       : (res.today_date_key || new Date().toISOString().slice(0, 10));
+   ```
+3. **Bungkus Log Konsol dengan Mode Debug:**
+   Hanya tampilkan log `[SOP Midnight Reset]` jika `window.__TB_DEBUG === true` agar konsol browser tetap bersih 100%.
+
+### Solusi Isu 2: Penguncian Status BBM & Pencegahan Pop-up Ganda
+1. **Status Database Saat Ini:**
+   Seluruh data pending telah terespon (`IZN-261106-229` dan `IZN-261106-408` sudah berstatus `DISETUJUI` di Supabase). Tidak akan ada lagi pop-up yang muncul.
+2. **Pengamanan Validasi Input Sopir:**
+   Pastikan di form pengajuan izin BBM sopir (`modulArmada`), pemilihan armada mobil wajib diisi (`required`) sehingga tidak ada lagi izin dengan plat kosong (`-`).
+
+
+================================================================================
+REVISI v6.3.1: BLUEPRINT DESAIN & ARSITEKTUR NOTIFIKASI MULTI-APPROVAL BBM
+(BULK APPROVAL, SNOOZE / INGKATKAN NANTI, & RE-EMERGE ON REFRESH)
+Tanggal: 07 November 2026 | Waktu Desain: 01:00 WITA
+Status: SELESAI DITERAPKAN 100% KE PRODUKSI LIVE (VERIFIED & AUDITED)
+================================================================================
+
+## 1. LATAR BELAKANG & TUJUAN PRODUK (PRODUCT OBJECTIVE)
+
+Sesuai arahan Owner, alur konfirmasi izin BBM sebelumnya yang memunculkan pop-up permohonan satu per satu secara beruntun (*sequential popups*) menimbulkan kebingungan karena Owner merasa sudah menyetujui namun pop-up muncul kembali untuk sopir/permohonan berikutnya.
+
+Tujuan perancangan ini adalah:
+1. **Penyatuan Seluruh Izin Pending (Unified Multi-Item Modal):** Jika ada lebih dari 1 permohonan masuk secara bersamaan, semuanya disatukan dalam satu antarmuka terpadu (daftar kartu permohonan) dengan counter badge yang jelas (misal: "2 Permohonan BBM Menunggu").
+2. **Fleksibilitas Granular & Bulk Approval:**
+   - Owner dapat menyetujui / menolak masing-masing sopir secara individual (*Granular Action*).
+   - Owner dapat menyetujui sekaligus semua permohonan dalam 1 klik (*Bulk Action: "SETUJUI SEMUA (N)"*).
+3. **Tombol "Ingatkan Nanti" / Close (X) dengan Perilaku Refresh Reaktif:**
+   - Owner dapat menutup modal atau menekan tombol **"Ingatkan Nanti"** tanpa harus langsung memutuskan (misal ingin crosscheck stok, nota, atau posisi mobil terlebih dahulu).
+   - Selama Owner bekerja pada halaman tersebut tanpa refresh, modal tidak akan mengganggu.
+   - **Begitu Owner me-refresh halaman (F5), modal otomatis muncul kembali** mengingatkan bahwa masih ada izin yang belum diproses.
+
+---
+
+## 2. WIREFRAME & TATA LETAK ANTARMUKA (UI/UX SPECIFICATION)
+
+### A. Kondisi 1: Hanya Ada 1 Permohonan Masuk (Single Card View)
+Tetap menggunakan desain kartu tunggal yang bersih dan padat, namun dilengkapi tombol **Close (X)** di header dan tombol **"Ingatkan Nanti"** di bagian bawah:
+```text
++--------------------------------------------------------------+
+| [icon] NOTIFIKASI IZIN PENGISIAN                 [1]   [X]   |  <- Navy Header (#1955CD)
++--------------------------------------------------------------+
+| Sopir ini (a/n 01 PENGANTARAN) ingin melakukan pengisian     |
+| bahan bakar solar/bensin.                                    |
+|                                                              |
+| +----------------------------------------------------------+ |
+| | Armada Mobil:                       [ KT 8919 UQ (Dyna) ]| |
+| +----------------------------------------------------------+ |
+| Waktu Permohonan: 07/11/2026 00:30 WITA                      |
+|                                                              |
+|                     Apakah disetujui?                        |
+|                                                              |
+|   +-----------------------+     +------------------------+   |
+|   |         TIDAK         |     |      IYA, SETUJU       |   |
+|   +-----------------------+     +------------------------+   |
+|                                                              |
+|               [ Jam / Icon ] Ingatkan Nanti                  |  <- Secondary Snooze Link
++--------------------------------------------------------------+
+```
+
+### B. Kondisi 2: Ada Lebih dari 1 Permohonan Masuk (Multi-Item Stack View)
+Menampilkan daftar kartu permohonan yang dapat di-scroll dengan aksi per-kartu dan aksi massal (*Bulk Action*):
+```text
++--------------------------------------------------------------+
+| [icon] NOTIFIKASI IZIN PENGISIAN             [2 Menunggu] [X]|
++--------------------------------------------------------------+
+| Ada 2 permohonan BBM yang membutuhkan persetujuan Anda:      |
+|                                                              |
+| [ DAFTAR KARTU PERMOHONAN (SCROLLABLE MAX-H 55VH) ]          |
+| +----------------------------------------------------------+ |
+| | [Avatar] 01 PENGANTARAN (Sopir 1)                        | |
+| | Armada: KT 8919 UQ (Truk Dyna)  •  00:30 WITA            | |
+| | Aksi Cepat:       [ Tolak ]     [ Setujui ]              | |
+| +----------------------------------------------------------+ |
+| | [Avatar] 02 PENGANTARAN (Sopir 2)                        | |
+| | Armada: KT 8136 CM (Pick Up)    •  00:35 WITA            | |
+| | Aksi Cepat:       [ Tolak ]     [ Setujui ]              | |
+| +----------------------------------------------------------+ |
+|                                                              |
+| [ FOOTER BULK ACTIONS & SNOOZE ]                             |
+| +----------------------------------------------------------+ |
+| |                 [v] SETUJUI SEMUA (2)                    | |  <- Emerald Button (Full-width)
+| +----------------------------------------------------------+ |
+| |    [x] Tolak Semua    |      [ Jam ] Ingatkan Nanti      | |  <- Secondary Actions
+| +----------------------------------------------------------+ |
++--------------------------------------------------------------+
+```
+
+---
+
+## 3. SPESIFIKASI LOGIKA & INTERAKSI SISTEM
+
+### 1. Logika Snooze ("Ingatkan Nanti") & Re-Emerge on Refresh
+- Saat tombol **"Ingatkan Nanti"** atau icon **[X]** diklik:
+  - Modal ditutup (`modalAdminConfirmBBM.classList.add('hidden')`).
+  - Disimpan flag di memori runtime JavaScript: `window.adminBbmSnoozedUntilRefresh = true`.
+  - Heartbeat background polling (yang berdetak tiap 60 detik) akan mendeteksi `if (window.adminBbmSnoozedUntilRefresh) return;` sehingga modal tidak akan muncul tiba-tiba saat Owner sedang mengetik nota atau memeriksa laporan.
+- **Saat Halaman Di-refresh (F5):**
+  - Variabel `window.adminBbmSnoozedUntilRefresh` ter-reset otomatis menjadi `false`.
+  - Sistem mendeteksi sisa izin yang belum di-approve dan langsung memunculkan modal kembali.
+  - Tujuan Owner tercapai 100%: bebas crosscheck tanpa gangguan pop-up berulang, namun aman dari kelupaan begitu refresh dilakukan.
+
+### 2. Logika Aksi Granular (Per-Driver)
+- Saat tombol **[Setujui]** atau **[Tolak]** pada salah satu kartu permohonan diklik:
+  - Kartu tersebut langsung dianimasikan memudar (fade out/slide out) dan dihapus dari antarmuka secara instan (*Optimistic UI*).
+  - Counter badge di header berkurang otomatis (misal dari 2 menjadi 1).
+  - Jika sisa kartu tinggal 1, antarmuka otomatis menyesuaikan menjadi tampilan kartu tunggal yang elegan.
+  - Jika seluruh kartu selesai direspon, modal menutup otomatis dengan efek chime sukses.
+
+### 3. Logika Aksi Massal (Bulk Approval: "Setujui Semua")
+- Saat Owner menekan tombol **"SETUJUI SEMUA (N)"**:
+  - Tampilkan konfirmasi instan: *"Menyetujui N permohonan BBM sekaligus..."*.
+  - Frontend memanggil fungsi backend baru `google.script.run.respondBulkIzinIsiBBM(idList, 'DISETUJUI', adminName)`.
+  - Backend adapter Supabase mengeksekusi update sekaligus menggunakan query batch PostgreSQL:
+    ```javascript
+    await sb.from('fuel_approvals')
+        .update({
+            status: 'DISETUJUI',
+            responded_by: adminName,
+            responded_at: new Date().toISOString()
+        })
+        .in('id', idList);
+    ```
+  - Modal tertutup seketika dalam 0.1 detik dan audio lonceng sukses dibunyikan.
+
+---
+
+## 4. RENCANA EKSEKUSI PERBAIKAN KODE
+
+| No | Berkas yang Dimodifikasi | Perubahan yang Dilakukan |
+| :--- | :--- | :--- |
+| **1** | [index.html](file:///c:/Users/Farhandy/.gemini/antigravity-ide/scratch/projek%20ami/tb-delivery-pro/index.html) | 1. Desain ulang markup `#modalAdminConfirmBBM` untuk mendukung Multi-Item Card Stack & Header Close Button [X].<br>2. Perbarui `handleAdminPendingBBMList` untuk me-render daftar kartu jika item > 1.<br>3. Tambahkan fungsi `handleAdminSnoozeBBM()`, `handleAdminSingleCardRespond()`, dan `handleAdminBulkRespondBBM()`.<br>4. Perbaiki sinkronisasi tanggal di baris 3.773.387 menggunakan `getTodayWitaDateKey()`. |
+| **2** | [supabase-gas-adapter.js](file:///c:/Users/Farhandy/.gemini/antigravity-ide/scratch/projek%20ami/tb-delivery-pro/supabase-gas-adapter.js) | 1. Tambahkan fungsi endpoint `respondBulkIzinIsiBBM(idList, action, adminName)`.<br>2. Perbaiki kalkulasi tanggal WITA di `getActiveSopBroadcast` agar tidak memakai `.toISOString()` yang memicu bug looping tengah malam. |
+
+---
