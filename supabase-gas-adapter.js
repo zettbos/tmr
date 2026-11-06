@@ -53,25 +53,37 @@
         return String(d);
     }
 
-    // Helper: Format tanggal & jam Indonesia (dd/MM/yyyy HH:mm)
+    // Helper: Format tanggal & jam Indonesia (dd/MM/yyyy HH:mm) dalam zona WITA
     function formatIndonesianDateTime(val) {
-        if (!val) return '';
-        const str = String(val).trim();
-        if (/^\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}/.test(str)) return str;
-        const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
-        if (m) {
-            return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+        if (!val || val === '-' || val === 'null' || val === 'undefined') return '-';
+        if (typeof val === 'string') {
+            const s = val.trim();
+            if (/^\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}/.test(s) && !s.includes('T') && !s.includes('+')) return s;
         }
-        const d = new Date(str);
+        const d = (val instanceof Date) ? val : new Date(val);
         if (!isNaN(d.getTime())) {
-            const dd = String(d.getDate()).padStart(2, '0');
-            const mm = String(d.getMonth() + 1).padStart(2, '0');
-            const yyyy = d.getFullYear();
-            const hh = String(d.getHours()).padStart(2, '0');
-            const min = String(d.getMinutes()).padStart(2, '0');
-            return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+            try {
+                const dtf = new Intl.DateTimeFormat('en-GB', {
+                    timeZone: 'Asia/Makassar',
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                });
+                return dtf.format(d).replace(',', '');
+            } catch (e) {
+                const wita = new Date(d.getTime() + (8 * 3600 * 1000));
+                const dd = String(wita.getUTCDate()).padStart(2, '0');
+                const mm = String(wita.getUTCMonth() + 1).padStart(2, '0');
+                const yyyy = wita.getUTCFullYear();
+                const hh = String(wita.getUTCHours()).padStart(2, '0');
+                const min = String(wita.getUTCMinutes()).padStart(2, '0');
+                return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+            }
         }
-        return str;
+        return String(val);
     }
 
     // Helper: Format tanggal saja Indonesia (dd/MM/yyyy)
@@ -2508,20 +2520,25 @@
             try {
                 filterOpt = filterOpt || {};
                 const filterPlat = (filterOpt.noPlat || '').trim().toUpperCase();
-                const filterSopir = (filterOpt.namaSopir || '').trim().toLowerCase();
-                const filterPom = (filterOpt.namaPom || '').trim().toLowerCase();
-                const filterJenisBBM = (filterOpt.jenisBBM || '').trim().toLowerCase();
-                const filterJenisOli = (filterOpt.jenisOli || filterOpt.merekOli || '').trim().toLowerCase();
-                const filterBengkel = (filterOpt.namaBengkel || '').trim().toLowerCase();
+                const rawSopir = (filterOpt.namaSopir || '').trim().toLowerCase();
+                const filterSopir = (rawSopir === 'semua' || rawSopir === 'all' || rawSopir === 'semua sopir') ? '' : rawSopir;
+                const rawPom = (filterOpt.namaPom || '').trim().toLowerCase();
+                const filterPom = (rawPom === 'semua' || rawPom === 'all' || rawPom === 'semua pom') ? '' : rawPom;
+                const rawJenisBBM = (filterOpt.jenisBBM || '').trim().toLowerCase();
+                const filterJenisBBM = (rawJenisBBM === 'semua' || rawJenisBBM === 'all' || rawJenisBBM === 'semua jenis') ? '' : rawJenisBBM;
+                const rawJenisOli = (filterOpt.jenisOli || filterOpt.merekOli || '').trim().toLowerCase();
+                const filterJenisOli = (rawJenisOli === 'semua' || rawJenisOli === 'all' || rawJenisOli === 'semua jenis') ? '' : rawJenisOli;
+                const rawBengkel = (filterOpt.namaBengkel || '').trim().toLowerCase();
+                const filterBengkel = (rawBengkel === 'semua' || rawBengkel === 'all' || rawBengkel === 'semua bengkel') ? '' : rawBengkel;
                 const tglAwal = filterOpt.periodeAwal || '';
                 const tglAkhir = filterOpt.periodeAkhir || '';
 
                 function isPlatMatch(dataPlat, targetPlat) {
-                    if (!targetPlat || targetPlat === 'SEMUA') return true;
-                    const cTarget = String(targetPlat || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    if (!targetPlat || targetPlat === 'SEMUA' || targetPlat === 'semua') return true;
+                    const cleanTarget = String(targetPlat || '').split('-')[0].trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
                     const cData = String(dataPlat || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-                    if (!cTarget) return true;
-                    return cData === cTarget || cData.includes(cTarget) || cTarget.includes(cData);
+                    if (!cleanTarget) return true;
+                    return cData === cleanTarget || cData.includes(cleanTarget) || cleanTarget.includes(cData);
                 }
 
                 function isDateMatch(dStr) {
@@ -6403,45 +6420,82 @@
                 const opt = filterOpt || {};
                 let query = sb.from('orders').select('*').order('created_at', { ascending: false });
 
+                const stKirim = (opt.statusPengiriman || opt.status || '').trim();
+                if (stKirim && !stKirim.toLowerCase().includes('semua')) {
+                    query = query.ilike('delivery_status', `%${stKirim}%`);
+                }
+
+                const stBayar = (opt.statusPembayaran || opt.statusBayar || '').trim();
+                if (stBayar && !stBayar.toLowerCase().includes('semua')) {
+                    query = query.ilike('payment_status', `%${stBayar}%`);
+                }
+
+                const drv = (opt.idSopir || opt.sopir || opt.driver || '').trim();
+                if (drv && !drv.toLowerCase().includes('semua')) {
+                    query = query.ilike('driver_name', `%${drv}%`);
+                }
+
+                const pel = (opt.pelanggan || opt.namaPelanggan || '').trim();
+                if (pel && !pel.toLowerCase().includes('semua')) {
+                    query = query.ilike('customer_name', `%${pel}%`);
+                }
+
                 if (opt.dariTanggal) {
                     query = query.gte('date', opt.dariTanggal);
                 }
                 if (opt.sampaiTanggal) {
                     query = query.lte('date', opt.sampaiTanggal);
                 }
-                if (opt.sopir && opt.sopir !== 'Semua Sopir' && opt.sopir !== 'Semua' && opt.sopir !== 'all') {
-                    query = query.ilike('driver_name', `%${opt.sopir}%`);
-                }
-                if (opt.status && opt.status !== 'Semua' && opt.status !== 'all') {
-                    query = query.ilike('delivery_status', `%${opt.status}%`);
-                }
-                if (opt.statusBayar && opt.statusBayar !== 'Semua' && opt.statusBayar !== 'all') {
-                    query = query.ilike('payment_status', `%${opt.statusBayar}%`);
-                }
-                if (opt.pelanggan && opt.pelanggan !== 'Semua Pelanggan' && opt.pelanggan !== 'Semua') {
-                    query = query.ilike('customer_name', `%${opt.pelanggan}%`);
+
+                const bln = opt.bulan || '';
+                const thn = opt.tahun || '';
+                if (thn && bln) {
+                    const blnStr = String(bln).padStart(2, '0');
+                    const lastDay = new Date(parseInt(thn, 10), parseInt(bln, 10), 0).getDate();
+                    query = query.gte('date', `${thn}-${blnStr}-01`).lte('date', `${thn}-${blnStr}-${String(lastDay).padStart(2, '0')}`);
+                } else if (thn) {
+                    query = query.gte('date', `${thn}-01-01`).lte('date', `${thn}-12-31`);
                 }
 
                 const { data, error } = await query;
                 if (error) throw error;
 
-                const mapped = (data || []).map(o => ({
-                    id_order: o.order_id,
-                    tanggal_order: o.date,
-                    tanggal_pengantaran: o.delivery_date,
-                    nama_pelanggan: o.customer_name,
-                    no_hp_pelanggan: o.customer_phone,
-                    alamat_pelanggan: o.customer_address,
-                    detail_barang: o.items_summary,
-                    total_belanja: o.total_amount,
-                    ongkos_kirim: o.shipping_cost,
-                    nama_sopir: o.driver_name,
-                    nama_checker: o.checker_name || 'Petugas Gudang',
-                    status_pengiriman: o.delivery_status,
-                    status_pembayaran: o.payment_status,
-                    catatan: o.notes,
-                    waktu_selesai: o.finish_time || o.completed_at
-                }));
+                let filtered = data || [];
+                if (bln && !thn) {
+                    const targetMonth = parseInt(bln, 10);
+                    filtered = filtered.filter(o => {
+                        if (!o.date) return false;
+                        const d = new Date(o.date);
+                        return (d.getMonth() + 1) === targetMonth;
+                    });
+                }
+
+                const mapped = filtered.map(o => {
+                    const totalBelanja = Number(o.total_amount || 0);
+                    const ongkir = Number(o.shipping_cost || 0);
+                    return {
+                        id_order: o.order_id,
+                        tanggal_order: o.date,
+                        tanggal_pengantaran: o.delivery_date,
+                        nama_pelanggan: o.customer_name,
+                        no_hp_pelanggan: o.customer_phone,
+                        alamat_pelanggan: o.customer_address,
+                        alamat_lengkap: o.customer_address,
+                        detail_barang: o.items_summary || '-',
+                        total_belanja: totalBelanja,
+                        total_nilai_nota: totalBelanja,
+                        ongkos_kirim: ongkir,
+                        biaya_ongkir: ongkir,
+                        nama_sopir: o.driver_name || 'Semua Sopir',
+                        nama_checker: o.checker_name || 'Petugas Gudang',
+                        status_pengiriman: o.delivery_status,
+                        status_pembayaran: o.payment_status,
+                        catatan: o.notes || '',
+                        catatan_nota: o.notes || '',
+                        waktu_selesai: o.finish_time || o.completed_at || '-',
+                        tanggal_selesai: o.finish_time || o.completed_at || '-'
+                    };
+                });
 
                 return {
                     success: true,
