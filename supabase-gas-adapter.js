@@ -25,6 +25,27 @@
         return _supabase;
     }
 
+    // Helper: Konversi URL Google Drive ke direct image Edge CDN (lh3.googleusercontent.com)
+    function convertDriveUrlToDirectImage(url) {
+        if (!url || typeof url !== 'string') return '';
+        const cleanUrl = url.trim();
+        if (cleanUrl.startsWith('data:image')) return cleanUrl;
+        if (cleanUrl.includes('lh3.googleusercontent.com')) return cleanUrl;
+
+        // Ekstrak file ID Google Drive
+        const driveMatch = cleanUrl.match(/\/file\/d\/([-\w]{25,})/i) ||
+                           cleanUrl.match(/[?&]id=([-\w]{25,})/i) ||
+                           cleanUrl.match(/\/d\/([-\w]{25,})/i);
+
+        if (driveMatch && driveMatch[1]) {
+            return 'https://lh3.googleusercontent.com/d/' + driveMatch[1] + '=s1200';
+        }
+        return cleanUrl;
+    }
+    if (typeof window !== 'undefined') {
+        window.convertDriveUrlToDirectImage = convertDriveUrlToDirectImage;
+    }
+
     // Helper: Format tanggal aman
     function formatDateIso(d) {
         if (!d) return new Date().toISOString();
@@ -1820,51 +1841,168 @@
             const sb = getClient();
             if (!sb) return { success: false, message: 'Database disconnected' };
             try {
-                const { data, error } = await sb.from('vehicles').select('*').order('id', { ascending: true });
-                if (error) return { success: false, message: error.message };
+                function isPlatMatchLocal(dataPlat, targetPlat) {
+                    if (!targetPlat) return false;
+                    const cTarget = String(targetPlat || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    const cData = String(dataPlat || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    if (!cTarget || !cData) return false;
+                    return cData === cTarget || cData.includes(cTarget) || cTarget.includes(cData);
+                }
+
+                function formatWitaDate(val) {
+                    if (!val) return '-';
+                    const dt = val instanceof Date ? val : new Date(val);
+                    if (isNaN(dt.getTime())) {
+                        const s = String(val).trim();
+                        if (s.includes('-')) {
+                            const p = s.split('-');
+                            if (p.length === 3) return p[2] + '/' + p[1] + '/' + p[0];
+                        }
+                        return s;
+                    }
+                    const utc = dt.getTime() + (dt.getTimezoneOffset() * 60000);
+                    const wita = new Date(utc + (8 * 3600 * 1000));
+                    const dd = String(wita.getDate()).padStart(2, '0');
+                    const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                    const yyyy = wita.getFullYear();
+                    return dd + '/' + mm + '/' + yyyy;
+                }
+
+                const [vRes, bbmRes, oliRes, srvRes] = await Promise.all([
+                    sb.from('vehicles').select('*').order('id', { ascending: true }),
+                    sb.from('fuel_logs').select('*').order('current_km', { ascending: true }),
+                    sb.from('oil_change_logs').select('*').order('service_km', { ascending: true }),
+                    sb.from('vehicle_services').select('*').order('current_km', { ascending: true })
+                ]);
+
+                const vData = vRes.data || [];
+                const bbmData = bbmRes.data || [];
+                const oliData = oliRes.data || [];
+                const srvData = srvRes.data || [];
 
                 let countSegeraGanti = 0;
                 let countWajibGanti = 0;
 
-                const list = (data || []).map(v => {
-                    const sisa = v.remaining_oil_km !== null && v.remaining_oil_km !== undefined ? Number(v.remaining_oil_km) : 5000;
+                const list = vData.map(v => {
+                    const noPlat = (v.plate_number || '').trim();
+                    let maxTxKm = 0;
+                    let latestTxTgl = '-';
+
+                    // 1. BBM untuk mobil ini
+                    const carBbm = [];
+                    for (const b of bbmData) {
+                        if (isPlatMatchLocal(b.plate_number, noPlat)) {
+                            const tglClean = formatWitaDate(b.fuel_date || b.created_at);
+                            const bKm = Number(b.current_km || 0);
+                            if (bKm > maxTxKm) {
+                                maxTxKm = bKm;
+                                latestTxTgl = tglClean;
+                            }
+                            carBbm.push({
+                                id: b.id,
+                                tgl: tglClean,
+                                km_saat_ini: bKm,
+                                jarak: Number(b.trip_distance || 0),
+                                liter: Number(b.liters || 0),
+                                konsumsi: Number(b.efficiency_ratio || 0)
+                            });
+                        }
+                    }
+
+                    let isiTerakhirLiter = 0;
+                    let tglTerakhirBbm = '-';
+                    let konsumsiBbm = 0;
+
+                    if (carBbm.length > 0) {
+                        const lastBbm = carBbm[carBbm.length - 1];
+                        isiTerakhirLiter = lastBbm.liter || 0;
+                        tglTerakhirBbm = lastBbm.tgl || '-';
+
+                        const totJarak = carBbm.reduce((acc, c) => acc + c.jarak, 0);
+                        const totLiter = carBbm.reduce((acc, c) => acc + c.liter, 0);
+                        if (totLiter > 0 && totJarak > 0) {
+                            konsumsiBbm = parseFloat((totJarak / totLiter).toFixed(1));
+                        } else if (lastBbm.konsumsi > 0) {
+                            konsumsiBbm = lastBbm.konsumsi;
+                        }
+                    }
+
+                    // 2. Oli untuk mobil ini
+                    const carOli = [];
+                    let maxGantiOliKm = 0;
+                    for (const o of oliData) {
+                        if (isPlatMatchLocal(o.plate_number, noPlat)) {
+                            const oKm = Number(o.service_km || 0);
+                            const oJenis = (o.transaction_type || 'Ganti Oli').trim();
+                            const oTgl = formatWitaDate(o.service_date || o.created_at);
+                            carOli.push({
+                                tgl: oTgl,
+                                km_ganti: oKm,
+                                jenis: oJenis
+                            });
+                            if (oKm > maxTxKm) {
+                                maxTxKm = oKm;
+                                latestTxTgl = oTgl;
+                            }
+                            if (oJenis === 'Ganti Oli' && oKm > maxGantiOliKm) {
+                                maxGantiOliKm = oKm;
+                            }
+                        }
+                    }
+
+                    // 3. Service untuk mobil ini
+                    for (const s of srvData) {
+                        if (isPlatMatchLocal(s.plate_number, noPlat)) {
+                            const sKm = Number(s.current_km || 0);
+                            const sTgl = formatWitaDate(s.service_date || s.created_at);
+                            if (sKm > maxTxKm) {
+                                maxTxKm = sKm;
+                                latestTxTgl = sTgl;
+                            }
+                        }
+                    }
+
+                    // KM Terkini: gunakan maxTxKm jika ada transaksi nyata, fallback ke current_km database
+                    let kmTerkini = maxTxKm > 0 ? maxTxKm : (Number(v.current_km || 0));
+                    let tglKmTerkini = latestTxTgl !== '-' ? latestTxTgl : (tglTerakhirBbm !== '-' ? tglTerakhirBbm : '-');
+
+                    let kmOli = maxGantiOliKm > 0 ? maxGantiOliKm : (Number(v.last_oil_km || 0) || kmTerkini);
+                    const interval = Number(v.oil_interval_km || 5000);
+
+                    let sisaOli = 0;
                     let statusOli = 'Aman';
-                    if (sisa <= 500) {
-                        statusOli = 'Wajib Ganti';
-                        countWajibGanti++;
-                    } else if (sisa <= 2000) {
-                        statusOli = 'Segera Ganti';
-                        countSegeraGanti++;
-                    }
 
-                    let konsumsiBbm = '-';
-                    if (v.plate_number === 'KT 8136 CM') konsumsiBbm = '133,7';
-                    else if (v.plate_number === 'KT 8919 UQ') konsumsiBbm = '64,0';
-                    else konsumsiBbm = '-';
-
-                    let lastFuelDate = v.last_fuel_date || '-';
-                    if (lastFuelDate && lastFuelDate.includes('-')) {
-                        const parts = lastFuelDate.split('-');
-                        if (parts.length === 3) lastFuelDate = parts[2] + '/' + parts[1] + '/' + parts[0];
+                    if (carOli.length === 0 && kmOli === 0) {
+                        statusOli = 'Belum Ada Transaksi';
+                        sisaOli = interval;
+                    } else {
+                        sisaOli = (kmOli + interval) - kmTerkini;
+                        if (sisaOli <= 500) {
+                            statusOli = 'Wajib Ganti';
+                            countWajibGanti++;
+                        } else if (sisaOli <= 2000) {
+                            statusOli = 'Segera Ganti';
+                            countSegeraGanti++;
+                        } else {
+                            statusOli = 'Aman';
+                        }
                     }
-                    const hasFuelTx = v.total_fuel_liters > 0 && v.last_fuel_date;
-                    const cleanFuelDate = (hasFuelTx && lastFuelDate !== '-') ? lastFuelDate : '-';
 
                     return {
                         id_kendaraan: v.id,
-                        no_plat: v.plate_number,
-                        jenis_mobil: v.vehicle_type,
+                        no_plat: noPlat,
+                        jenis_mobil: v.vehicle_type || 'Mobil',
                         nama_sopir: v.default_driver || '-',
-                        km_terkini: v.current_km,
-                        tgl_km_terkini: cleanFuelDate,
-                        isi_terakhir_liter: v.total_fuel_liters > 0 ? v.total_fuel_liters : 0,
-                        tgl_terakhir_bbm: cleanFuelDate,
-                        konsumsi_bbm: konsumsiBbm,
-                        km_terakhir_ganti_oli: v.last_oil_km,
-                        interval_oli: v.oil_interval_km || 5000,
+                        km_terkini: kmTerkini,
+                        tgl_km_terkini: tglKmTerkini,
+                        isi_terakhir_liter: isiTerakhirLiter,
+                        tgl_terakhir_bbm: tglTerakhirBbm,
+                        konsumsi_bbm: konsumsiBbm > 0 ? konsumsiBbm.toFixed(1).replace('.', ',') : '0,0',
+                        km_terakhir_ganti_oli: kmOli,
+                        interval_oli: interval,
                         status_oli: statusOli,
-                        sisa_km_oli: sisa,
-                        status_aktif: v.status === 'true' || v.status === true ? 'Aktif' : 'Nonaktif'
+                        sisa_km_oli: sisaOli,
+                        status_aktif: (v.status === 'true' || v.status === true || v.status === 'Aktif') ? 'Aktif' : 'Nonaktif'
                     };
                 });
 
@@ -1894,127 +2032,1604 @@
 
         getKendaraanList: async function() {
             const sb = getClient();
-            if (!sb) return [];
-            const { data } = await sb.from('vehicles').select('*').order('plate_number');
-            return (data || []).map(v => ({
-                id_kendaraan: v.id,
-                no_plat: v.plate_number,
-                jenis_mobil: v.vehicle_type,
-                sopir_default: v.default_driver,
-                km_terkini: v.current_km,
-                total_liter_bbm: v.total_fuel_liters,
-                status_aktif: v.status
-            }));
-        },
-
-        requestIzinIsiBBM: async function(payload) {
-            const sb = getClient();
-            if (!sb) return { success: false };
-            const idIzin = 'IZN-' + Date.now().toString().slice(-6);
-            const dataToInsert = {
-                id: idIzin,
-                request_time: new Date().toISOString(),
-                driver_id: payload.driver_id || payload.id_sopir,
-                driver_name: payload.driver_name || payload.nama_sopir,
-                plate_number: payload.plate_number || payload.no_plat,
-                status: 'Menunggu Persetujuan',
-                notes: payload.notes || payload.catatan || '',
-                is_used: 'Belum'
-            };
-            const { error } = await sb.from('fuel_approvals').insert([dataToInsert]);
-            return { success: !error, message: error ? error.message : 'Permohonan izin BBM berhasil diajukan!' };
-        },
-
-        respondIzinIsiBBM: async function(idIzin, status, catatan, adminName) {
-            const sb = getClient();
-            if (!sb) return { success: false };
-            const { error } = await sb.from('fuel_approvals').update({
-                status: status,
-                catatan: catatan,
-                responded_by: adminName,
-                responded_at: new Date().toISOString()
-            }).eq('id', idIzin);
-            return { success: !error, message: error ? error.message : 'Izin BBM berhasil ditanggapi.' };
-        },
-
-        submitPengisianBBM: async function(payload) {
-            const sb = getClient();
-            if (!sb) return { success: false };
-            const idBbm = 'BBM-' + Date.now().toString().slice(-6);
-            const dataToInsert = {
-                id: idBbm,
-                fuel_date: payload.tanggal || new Date().toISOString(),
-                plate_number: payload.no_plat || payload.plate_number,
-                driver_id: payload.id_sopir || payload.driver_id,
-                driver_name: payload.nama_sopir || payload.driver_name,
-                current_km: Number(payload.km_saat_ini || 0),
-                liters: Number(payload.jumlah_liter || 0),
-                total_cost: Number(payload.total_biaya || 0),
-                gas_station: payload.nama_spbu || '',
-                fuel_type: payload.jenis_bbm || 'Solar',
-                km_photo_url: payload.foto_km || '',
-                receipt_photo_url: payload.foto_struk || '',
-                notes: payload.catatan || ''
-            };
-            const { error } = await sb.from('fuel_logs').insert([dataToInsert]);
-            if (!error && payload.plate_number) {
-                // Update KM mobil
-                await sb.from('vehicles').update({ current_km: Number(payload.km_saat_ini || 0) }).eq('plate_number', payload.plate_number);
+            if (!sb) return { success: false, data: [] };
+            try {
+                const { data, error } = await sb.from('vehicles').select('*').order('plate_number');
+                if (error) return { success: false, message: error.message, data: [] };
+                const list = (data || []).map(v => ({
+                    id_kendaraan: v.id,
+                    no_plat: v.plate_number,
+                    jenis_mobil: v.vehicle_type,
+                    sopir_default: v.default_driver || '-',
+                    km_terkini: Number(v.current_km || 0),
+                    km_terakhir_ganti_oli: Number(v.last_oil_km || 0),
+                    interval_servis_km: Number(v.oil_interval_km || 5000),
+                    interval_ganti_oli: Number(v.oil_interval_km || 5000),
+                    total_liter_bbm: Number(v.total_fuel_liters || 0),
+                    status_aktif: v.status
+                }));
+                return { success: true, data: list };
+            } catch (err) {
+                return { success: false, message: err.message, data: [] };
             }
-            return { success: !error, message: error ? error.message : 'Pengisian BBM berhasil dicatat!' };
         },
 
-        deleteBBMTransaction: async function(idBbm) {
+        getVehicleDashboardData: async function(noPlat, driverUser) {
             const sb = getClient();
-            if (!sb) return { success: false };
-            const { error } = await sb.from('fuel_logs').delete().eq('id', idBbm);
-            return { success: !error, message: error ? error.message : 'Data BBM berhasil dihapus.' };
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                function isPlatMatchLocal(p1, p2) {
+                    if (!p1 || !p2) return false;
+                    const c1 = String(p1).toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    const c2 = String(p2).toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    if (!c1 || !c2) return false;
+                    return c1 === c2 || c1.includes(c2) || c2.includes(c1);
+                }
+
+                const [vRes, bbmRes, oliRes, srvRes] = await Promise.all([
+                    sb.from('vehicles').select('*'),
+                    sb.from('fuel_logs').select('*').order('current_km', { ascending: true }),
+                    sb.from('oil_change_logs').select('*').order('service_km', { ascending: true }),
+                    sb.from('vehicle_services').select('*').order('current_km', { ascending: true })
+                ]);
+
+                const vData = vRes.data || [];
+                let targetVehicle = null;
+
+                if (noPlat) {
+                    targetVehicle = vData.find(k => isPlatMatchLocal(k.plate_number, noPlat));
+                }
+                if (!targetVehicle && driverUser && driverUser.nama) {
+                    targetVehicle = vData.find(k => (k.default_driver || '').toLowerCase() === driverUser.nama.toLowerCase());
+                }
+                if (!targetVehicle && vData.length > 0) {
+                    targetVehicle = vData[0];
+                }
+
+                if (!targetVehicle) {
+                    return { success: false, message: 'Data kendaraan tidak ditemukan' };
+                }
+
+                const tPlate = targetVehicle.plate_number;
+
+                // Riwayat BBM
+                const bbmHistory = [];
+                let totalLiter = 0;
+                let totalJarak = 0;
+                const rawBbm = bbmRes.data || [];
+                for (const row of rawBbm) {
+                    if (isPlatMatchLocal(row.plate_number, tPlate)) {
+                        const liter = Number(row.liters || 0);
+                        const jarak = Number(row.trip_distance || 0);
+                        totalLiter += liter;
+                        totalJarak += jarak;
+
+                        bbmHistory.push({
+                            id_bbm: String(row.id || ''),
+                            tanggal: formatIndonesianDateTime(row.fuel_date || row.created_at),
+                            no_plat: String(row.plate_number || ''),
+                            nama_sopir: String(row.driver_name || '-'),
+                            km_saat_ini: Number(row.current_km || 0),
+                            km_sebelumnya: Number(row.prev_km || 0),
+                            jarak_tempuh: jarak,
+                            jumlah_liter: liter,
+                            total_biaya: Number(row.total_cost || 0),
+                            rata_rata_konsumsi: Number(row.efficiency_ratio || 0),
+                            nama_spbu: String(row.gas_station || '-'),
+                            jenis_bbm: String(row.fuel_type || 'Solar'),
+                            url_foto_km: convertDriveUrlToDirectImage(row.km_photo_url || ''),
+                            url_foto_struk: convertDriveUrlToDirectImage(row.receipt_photo_url || ''),
+                            url_foto_muatan: convertDriveUrlToDirectImage(row.cargo_photo_url || ''),
+                            catatan: String(row.notes || ''),
+                            waktu_input: row.created_at || row.fuel_date
+                        });
+                    }
+                }
+
+                const avgKonsumsi = totalLiter > 0 && totalJarak > 0 ? (totalJarak / totalLiter).toFixed(1) : '10.0';
+
+                // Riwayat Oli
+                const oliHistory = [];
+                const rawOli = oliRes.data || [];
+                for (const row of rawOli) {
+                    if (isPlatMatchLocal(row.plate_number, tPlate)) {
+                        oliHistory.push({
+                            id_oli: String(row.id || ''),
+                            tanggal: formatIndonesianDateTime(row.service_date || row.created_at),
+                            no_plat: String(row.plate_number || ''),
+                            nama_sopir: String(row.driver_name || '-'),
+                            km_saat_ganti: Number(row.service_km || 0),
+                            jenis_transaksi: String(row.transaction_type || 'Ganti Oli'),
+                            merek_oli: String(row.oil_brand || '-'),
+                            jumlah_liter: Number(row.liters || 0),
+                            total_biaya: Number(row.total_cost || 0),
+                            nama_bengkel: String(row.workshop_name || '-'),
+                            url_foto_km: convertDriveUrlToDirectImage(row.km_photo_url || ''),
+                            url_foto_nota: convertDriveUrlToDirectImage(row.receipt_photo_url || ''),
+                            catatan: String(row.notes || '')
+                        });
+                    }
+                }
+
+                // Riwayat Servis
+                const srvHistory = [];
+                const rawSrv = srvRes.data || [];
+                for (const row of rawSrv) {
+                    if (isPlatMatchLocal(row.plate_number, tPlate)) {
+                        srvHistory.push({
+                            id_service: String(row.id || ''),
+                            tanggal: formatIndonesianDateTime(row.service_date || row.created_at),
+                            no_plat: String(row.plate_number || ''),
+                            nama_sopir: String(row.driver_name || '-'),
+                            km_saat_ini: Number(row.current_km || 0),
+                            nama_bengkel: String(row.workshop_name || '-'),
+                            biaya_perbaikan: Number(row.cost || 0),
+                            catatan_perbaikan: String(row.repair_details || ''),
+                            url_foto_nota: convertDriveUrlToDirectImage(row.receipt_photo_url || '')
+                        });
+                    }
+                }
+
+                let maxKmFound = 0;
+                bbmHistory.forEach(b => { if (b.km_saat_ini > maxKmFound) maxKmFound = b.km_saat_ini; });
+                oliHistory.forEach(o => { if (o.km_saat_ganti > maxKmFound) maxKmFound = o.km_saat_ganti; });
+                srvHistory.forEach(s => { if (s.km_saat_ini > maxKmFound) maxKmFound = s.km_saat_ini; });
+
+                const effectiveKm = maxKmFound > 0 ? maxKmFound : Number(targetVehicle.current_km || 0);
+
+                let latestGantiOliKm = 0;
+                for (let i = oliHistory.length - 1; i >= 0; i--) {
+                    if (oliHistory[i].jenis_transaksi === 'Ganti Oli' && oliHistory[i].km_saat_ganti > 0) {
+                        latestGantiOliKm = oliHistory[i].km_saat_ganti;
+                        break;
+                    }
+                }
+
+                const interval = Number(targetVehicle.oil_interval_km || 5000);
+                const baseKmOli = latestGantiOliKm > 0 ? latestGantiOliKm : Number(targetVehicle.last_oil_km || 0);
+                const sisaOli = (baseKmOli + interval) - effectiveKm;
+                let statusOli = 'Oli Aman';
+                if (sisaOli <= 500) statusOli = 'WAJIB GANTI OLI';
+                else if (sisaOli <= 2000) statusOli = 'Segera Ganti Oli';
+                else statusOli = 'Oli Aman';
+
+                let terakhirIsiBbm = '-';
+                if (bbmHistory.length > 0) {
+                    const latestBbm = bbmHistory[bbmHistory.length - 1];
+                    terakhirIsiBbm = latestBbm.tanggal || '-';
+                } else if (targetVehicle.last_fuel_date) {
+                    terakhirIsiBbm = formatIndonesianDateTime(targetVehicle.last_fuel_date);
+                }
+
+                const targetVehicleObj = {
+                    id_kendaraan: targetVehicle.id,
+                    no_plat: targetVehicle.plate_number,
+                    jenis_mobil: targetVehicle.vehicle_type || 'Mobil',
+                    sopir_default: targetVehicle.default_driver || '-',
+                    km_terkini: effectiveKm,
+                    km_terakhir_ganti_oli: baseKmOli,
+                    interval_servis_km: interval,
+                    interval_ganti_oli: interval,
+                    sisa_km_oli: sisaOli,
+                    status_oli: statusOli,
+                    terakhir_isi_bbm: terakhirIsiBbm,
+                    status_aktif: targetVehicle.status
+                };
+
+                return {
+                    success: true,
+                    kendaraan: targetVehicleObj,
+                    avg_konsumsi: avgKonsumsi,
+                    bbm_history: bbmHistory.reverse(),
+                    oli_history: oliHistory.reverse(),
+                    service_history: srvHistory.reverse()
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
         },
 
-        submitInputOli: async function(payload) {
+        getVehicleReports: async function(filterOpt) {
             const sb = getClient();
-            if (!sb) return { success: false };
-            const idOli = 'OLI-' + Date.now().toString().slice(-6);
-            const dataToInsert = {
-                id: idOli,
-                service_date: payload.tanggal || new Date().toISOString(),
-                plate_number: payload.no_plat,
-                driver_id: payload.id_sopir,
-                driver_name: payload.nama_sopir,
-                service_km: Number(payload.km_saat_ganti || 0),
-                oil_brand: payload.merek_oli || '',
-                liters: Number(payload.jumlah_liter || 0),
-                total_cost: Number(payload.total_biaya || 0),
-                workshop_name: payload.nama_bengkel || ''
-            };
-            const { error } = await sb.from('oil_change_logs').insert([dataToInsert]);
-            return { success: !error, message: error ? error.message : 'Riwayat ganti oli berhasil dicatat!' };
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                filterOpt = filterOpt || {};
+                const filterPlat = (filterOpt.noPlat || '').trim().toUpperCase();
+                const filterSopir = (filterOpt.namaSopir || '').trim().toLowerCase();
+                const filterPom = (filterOpt.namaPom || '').trim().toLowerCase();
+                const filterJenisBBM = (filterOpt.jenisBBM || '').trim().toLowerCase();
+                const filterJenisOli = (filterOpt.jenisOli || filterOpt.merekOli || '').trim().toLowerCase();
+                const filterBengkel = (filterOpt.namaBengkel || '').trim().toLowerCase();
+                const tglAwal = filterOpt.periodeAwal || '';
+                const tglAkhir = filterOpt.periodeAkhir || '';
+
+                function isPlatMatch(dataPlat, targetPlat) {
+                    if (!targetPlat || targetPlat === 'SEMUA') return true;
+                    const cTarget = String(targetPlat || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    const cData = String(dataPlat || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    if (!cTarget) return true;
+                    return cData === cTarget || cData.includes(cTarget) || cTarget.includes(cData);
+                }
+
+                function isDateMatch(dStr) {
+                    if (!tglAwal && !tglAkhir) return true;
+                    if (!dStr) return true;
+                    const dt = new Date(dStr);
+                    if (isNaN(dt.getTime())) return true;
+                    if (tglAwal && dt < new Date(tglAwal)) return false;
+                    if (tglAkhir && dt > new Date(tglAkhir + 'T23:59:59')) return false;
+                    return true;
+                }
+
+                const [vRes, bbmRes, oliRes, srvRes] = await Promise.all([
+                    sb.from('vehicles').select('*'),
+                    sb.from('fuel_logs').select('*').order('fuel_date', { ascending: false }),
+                    sb.from('oil_change_logs').select('*').order('service_date', { ascending: false }),
+                    sb.from('vehicle_services').select('*').order('service_date', { ascending: false })
+                ]);
+
+                const vehicles = vRes.data || [];
+                const bbmLogs = bbmRes.data || [];
+                const oliLogs = oliRes.data || [];
+                const srvLogs = srvRes.data || [];
+
+                // 1. LAPORAN BBM
+                const bbmList = [];
+                let bbmTotalLiter = 0;
+                let bbmTotalBiaya = 0;
+                let bbmTotalJarak = 0;
+                const pomCounts = {};
+
+                for (const r of bbmLogs) {
+                    const plat = (r.plate_number || '').trim().toUpperCase();
+                    const sopir = (r.driver_name || '').trim().toLowerCase();
+                    const pom = (r.gas_station || '').trim().toLowerCase();
+                    const jnsBBM = (r.fuel_type || '').trim().toLowerCase();
+                    const tgl = r.fuel_date || r.created_at;
+
+                    if (!isPlatMatch(plat, filterPlat)) continue;
+                    if (filterSopir && !sopir.includes(filterSopir)) continue;
+                    if (filterPom && !pom.includes(filterPom)) continue;
+                    if (filterJenisBBM && !jnsBBM.includes(filterJenisBBM)) continue;
+                    if (!isDateMatch(tgl)) continue;
+
+                    const liter = Number(r.liters || 0);
+                    const biaya = Number(r.total_cost || 0);
+                    const jarak = Number(r.trip_distance || 0);
+                    const konsumsi = Number(r.efficiency_ratio || 0);
+
+                    bbmTotalLiter += liter;
+                    bbmTotalBiaya += biaya;
+                    bbmTotalJarak += jarak;
+
+                    const spbuName = (r.gas_station || 'SPBU Lainnya').trim();
+                    if (!pomCounts[spbuName]) pomCounts[spbuName] = { count: 0, total_biaya: 0, total_liter: 0 };
+                    pomCounts[spbuName].count += 1;
+                    pomCounts[spbuName].total_biaya += biaya;
+                    pomCounts[spbuName].total_liter += liter;
+
+                    bbmList.push({
+                        id_bbm: String(r.id || ''),
+                        tanggal: formatIndonesianDateTime(tgl),
+                        no_plat: plat,
+                        id_sopir: String(r.driver_id || ''),
+                        nama_sopir: r.driver_name || '-',
+                        km_saat_ini: Number(r.current_km || 0),
+                        km_sebelumnya: Number(r.prev_km || 0),
+                        jarak_tempuh: jarak,
+                        jumlah_liter: liter,
+                        jenis_bbm: r.fuel_type || 'Solar',
+                        total_biaya: biaya,
+                        rata_rata_konsumsi: konsumsi,
+                        nama_spbu: spbuName,
+                        url_foto_km: convertDriveUrlToDirectImage(r.km_photo_url || ''),
+                        url_foto_struk: convertDriveUrlToDirectImage(r.receipt_photo_url || ''),
+                        url_foto_muatan: convertDriveUrlToDirectImage(r.cargo_photo_url || ''),
+                        catatan: r.notes || ''
+                    });
+                }
+
+                // Top 3 SPBU
+                const topPom = Object.keys(pomCounts).map(k => ({
+                    nama_spbu: k,
+                    total_biaya: pomCounts[k].total_biaya,
+                    total_liter: pomCounts[k].total_liter,
+                    frekuensi: pomCounts[k].count
+                })).sort((a, b) => b.total_biaya - a.total_biaya).slice(0, 3);
+
+                // 2. LAPORAN OLI
+                const oliList = [];
+                let oliTotalLiter = 0;
+                let oliTotalBiaya = 0;
+
+                for (const r of oliLogs) {
+                    const plat = (r.plate_number || '').trim().toUpperCase();
+                    const sopir = (r.driver_name || '').trim().toLowerCase();
+                    const bengkel = (r.workshop_name || '').trim().toLowerCase();
+                    const merek = (r.oil_brand || '').trim().toLowerCase();
+                    const tgl = r.service_date || r.created_at;
+
+                    if (!isPlatMatch(plat, filterPlat)) continue;
+                    if (filterSopir && !sopir.includes(filterSopir)) continue;
+                    if (filterBengkel && !bengkel.includes(filterBengkel)) continue;
+                    if (filterJenisOli && !merek.includes(filterJenisOli)) continue;
+                    if (!isDateMatch(tgl)) continue;
+
+                    const liter = Number(r.liters || 0);
+                    const biaya = Number(r.total_cost || 0);
+
+                    oliTotalLiter += liter;
+                    oliTotalBiaya += biaya;
+
+                    oliList.push({
+                        id_oli: String(r.id || ''),
+                        tanggal: formatIndonesianDateTime(tgl),
+                        no_plat: plat,
+                        id_sopir: String(r.driver_id || ''),
+                        nama_sopir: r.driver_name || '-',
+                        km_saat_ganti: Number(r.service_km || 0),
+                        jenis_transaksi: r.transaction_type || 'Ganti Oli',
+                        merek_oli: r.oil_brand || '-',
+                        jumlah_liter: liter,
+                        total_biaya: biaya,
+                        nama_bengkel: r.workshop_name || '-',
+                        url_foto_km: convertDriveUrlToDirectImage(r.km_photo_url || ''),
+                        url_foto_nota: convertDriveUrlToDirectImage(r.receipt_photo_url || ''),
+                        catatan: r.notes || ''
+                    });
+                }
+
+                // 3. LAPORAN SERVICE
+                const serviceList = [];
+                let serviceTotalBiaya = 0;
+
+                for (const r of srvLogs) {
+                    const plat = (r.plate_number || '').trim().toUpperCase();
+                    const sopir = (r.driver_name || '').trim().toLowerCase();
+                    const bengkel = (r.workshop_name || '').trim().toLowerCase();
+                    const tgl = r.service_date || r.created_at;
+
+                    if (!isPlatMatch(plat, filterPlat)) continue;
+                    if (filterSopir && !sopir.includes(filterSopir)) continue;
+                    if (filterBengkel && !bengkel.includes(filterBengkel)) continue;
+                    if (!isDateMatch(tgl)) continue;
+
+                    const biaya = Number(r.cost || 0);
+                    serviceTotalBiaya += biaya;
+
+                    serviceList.push({
+                        id_service: String(r.id || ''),
+                        tanggal: formatIndonesianDateTime(tgl),
+                        no_plat: plat,
+                        id_sopir: String(r.driver_id || ''),
+                        nama_sopir: r.driver_name || '-',
+                        km_saat_ini: Number(r.current_km || 0),
+                        nama_bengkel: r.workshop_name || '-',
+                        biaya_perbaikan: biaya,
+                        catatan_perbaikan: r.repair_details || '',
+                        url_foto_nota: convertDriveUrlToDirectImage(r.receipt_photo_url || '')
+                    });
+                }
+
+                // 4. REKAP PER KENDARAAN
+                const rekapKendaraanList = [];
+                for (const v of vehicles) {
+                    const noPlat = (v.plate_number || '').trim().toUpperCase();
+                    if (!isPlatMatch(noPlat, filterPlat)) continue;
+
+                    let totLiterBBM = 0;
+                    let totJarakBBM = 0;
+                    let totBiayaBBM = 0;
+                    let tglTerakhirBBM = '-';
+
+                    for (const b of bbmLogs) {
+                        if (isPlatMatch(b.plate_number, noPlat)) {
+                            totLiterBBM += Number(b.liters || 0);
+                            totJarakBBM += Number(b.trip_distance || 0);
+                            totBiayaBBM += Number(b.total_cost || 0);
+                            if (tglTerakhirBBM === '-') tglTerakhirBBM = formatIndonesianDateTime(b.fuel_date || b.created_at);
+                        }
+                    }
+
+                    let tglTerakhirOli = '-';
+                    let kmTerakhirOli = 0;
+                    for (const o of oliLogs) {
+                        if (isPlatMatch(o.plate_number, noPlat)) {
+                            if (tglTerakhirOli === '-') {
+                                tglTerakhirOli = formatIndonesianDateTime(o.service_date || o.created_at);
+                                kmTerakhirOli = Number(o.service_km || 0);
+                            }
+                        }
+                    }
+
+                    const avgKmPerL = totLiterBBM > 0 && totJarakBBM > 0 ? (totJarakBBM / totLiterBBM).toFixed(2) : '0';
+
+                    rekapKendaraanList.push({
+                        id_kendaraan: v.id,
+                        no_plat: noPlat,
+                        jenis_mobil: v.vehicle_type || 'Mobil',
+                        sopir_default: v.default_driver || '-',
+                        total_pengisian_bbm: bbmLogs.filter(b => isPlatMatch(b.plate_number, noPlat)).length,
+                        tanggal_terakhir_bbm: tglTerakhirBBM,
+                        total_liter_bbm: totLiterBBM,
+                        total_jarak_bbm: totJarakBBM,
+                        total_biaya_bbm: totBiayaBBM,
+                        rata_rata_konsumsi: avgKmPerL,
+                        tanggal_terakhir_ganti_oli: tglTerakhirOli,
+                        km_terakhir_ganti_oli: kmTerakhirOli || Number(v.last_oil_km || 0),
+                        km_terkini: Number(v.current_km || 0),
+                        interval_oli: Number(v.oil_interval_km || 5000),
+                        status_aktif: (v.status === 'true' || v.status === true || v.status === 'Aktif') ? 'Aktif' : 'Nonaktif'
+                    });
+                }
+
+                return {
+                    success: true,
+                    summary: {
+                        total_pengisian: bbmList.length,
+                        total_liter_bbm: bbmTotalLiter,
+                        total_biaya_bbm: bbmTotalBiaya,
+                        total_jarak_bbm: bbmTotalJarak,
+                        rata_rata_konsumsi: bbmTotalLiter > 0 && bbmTotalJarak > 0 ? (bbmTotalJarak / bbmTotalLiter).toFixed(2) : '0',
+                        total_biaya_oli: oliTotalBiaya,
+                        total_biaya_service: serviceTotalBiaya,
+                        grand_total_pengeluaran: bbmTotalBiaya + oliTotalBiaya + serviceTotalBiaya
+                    },
+                    bbm_report: bbmList,
+                    top_pom: topPom,
+                    oli_report: oliList,
+                    service_report: serviceList,
+                    rekap_kendaraan: rekapKendaraanList
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
         },
 
-        deleteOliTransaction: async function(idOli) {
+        // --- FUEL APPROVAL WORKFLOW ---
+        requestIzinIsiBBM: async function(driverIdOrPayload, driverNama, noPlat) {
             const sb = getClient();
-            if (!sb) return { success: false };
-            const { error } = await sb.from('oil_change_logs').delete().eq('id', idOli);
-            return { success: !error, message: error ? error.message : 'Data oli berhasil dihapus.' };
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                let dId, dName, nPlat, notes = '';
+                if (typeof driverIdOrPayload === 'object' && driverIdOrPayload !== null) {
+                    dId = driverIdOrPayload.driver_id || driverIdOrPayload.id_sopir || driverIdOrPayload.driverId;
+                    dName = driverIdOrPayload.driver_name || driverIdOrPayload.nama_sopir || driverIdOrPayload.driverNama;
+                    nPlat = driverIdOrPayload.plate_number || driverIdOrPayload.no_plat || driverIdOrPayload.noPlat;
+                    notes = driverIdOrPayload.notes || driverIdOrPayload.catatan || '';
+                } else {
+                    dId = driverIdOrPayload;
+                    dName = driverNama;
+                    nPlat = noPlat;
+                }
+
+                // Invalidate izin lama milik sopir ini yang belum dipakai
+                if (dId) {
+                    await sb.from('fuel_approvals')
+                        .update({ is_used: 'Diganti Permohonan Baru' })
+                        .eq('driver_id', String(dId).trim())
+                        .neq('is_used', 'Ya');
+                }
+
+                const now = new Date();
+                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                const yy = String(wita.getFullYear()).slice(-2);
+                const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                const dd = String(wita.getDate()).padStart(2, '0');
+                const rnd = Math.floor(100 + Math.random() * 900);
+                const idIzin = 'IZN-' + yy + mm + dd + '-' + rnd;
+
+                const { error } = await sb.from('fuel_approvals').insert([{
+                    id: idIzin,
+                    request_time: new Date().toISOString(),
+                    driver_id: String(dId || 'DRV').trim(),
+                    driver_name: String(dName || 'Sopir').trim(),
+                    plate_number: String(nPlat || '').trim().toUpperCase(),
+                    status: 'PENDING',
+                    notes: notes || null,
+                    is_used: 'Belum'
+                }]);
+
+                if (error) return { success: false, message: error.message };
+                return { success: true, message: 'Permohonan izin BBM berhasil diajukan!', idIzin: idIzin };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
         },
 
-        submitInputService: async function(payload) {
+        submitPermohonanIsiBBM: async function(driverIdOrPayload, driverNama, noPlat) {
+            return apiServices.requestIzinIsiBBM(driverIdOrPayload, driverNama, noPlat);
+        },
+
+        checkActiveBBMApproval: async function(driverId, targetIdIzin) {
             const sb = getClient();
-            if (!sb) return { success: false };
-            const idServis = 'SRV-' + Date.now().toString().slice(-6);
-            const dataToInsert = {
-                id: idServis,
-                service_date: payload.tanggal || new Date().toISOString(),
-                plate_number: payload.no_plat,
-                driver_id: payload.id_sopir,
-                driver_name: payload.nama_sopir,
-                current_km: Number(payload.km_saat_ini || 0),
-                workshop_name: payload.nama_bengkel || '',
-                cost: Number(payload.biaya_perbaikan || 0),
-                repair_details: payload.catatan_perbaikan || ''
-            };
-            const { error } = await sb.from('vehicle_services').insert([dataToInsert]);
-            return { success: !error, message: error ? error.message : 'Riwayat servis kendaraan berhasil disimpan!' };
+            if (!sb) return { hasApproval: false, status: 'NONE' };
+            try {
+                let query = sb.from('fuel_approvals').select('*').order('request_time', { ascending: false }).limit(10);
+                if (targetIdIzin) {
+                    query = query.eq('id', targetIdIzin);
+                } else if (driverId) {
+                    query = query.eq('driver_id', String(driverId).trim());
+                }
+
+                const { data, error } = await query;
+                if (error || !data || data.length === 0) {
+                    return { hasApproval: false, status: 'NONE' };
+                }
+
+                // Ambil approval terbaru
+                const row = data[0];
+                const st = (row.status || '').toUpperCase().trim();
+                const isUsed = (row.is_used || '').toLowerCase().trim();
+
+                if (isUsed === 'ya' || isUsed === 'diganti permohonan baru') {
+                    return { hasApproval: false, status: 'NONE' };
+                }
+
+                return {
+                    hasApproval: true,
+                    status: st,
+                    idIzin: row.id,
+                    plateNumber: row.plate_number,
+                    respondedBy: row.responded_by || '-'
+                };
+            } catch (err) {
+                return { hasApproval: false, status: 'NONE' };
+            }
+        },
+
+        getPendingBBMApprovals: async function(currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: true, data: [] };
+            try {
+                const { data, error } = await sb.from('fuel_approvals')
+                    .select('*')
+                    .eq('status', 'PENDING')
+                    .order('request_time', { ascending: false });
+
+                if (error) return { success: false, message: error.message, data: [] };
+
+                const pendingList = (data || []).map(row => ({
+                    idIzin: row.id,
+                    tanggalJam: formatIndonesianDateTime(row.request_time),
+                    idSopir: row.driver_id,
+                    namaSopir: row.driver_name,
+                    noPlat: row.plate_number,
+                    status: 'PENDING'
+                }));
+
+                return { success: true, data: pendingList };
+            } catch (err) {
+                return { success: false, message: err.message, data: [] };
+            }
+        },
+
+        respondIzinIsiBBM: async function(idIzin, action, userAdminNama, catatan) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const isApprove = (action === 'APPROVE' || action === 'DISETUJUI' || action === 'SETUJU');
+                const statusText = isApprove ? 'DISETUJUI' : 'DITOLAK';
+
+                const { error } = await sb.from('fuel_approvals').update({
+                    status: statusText,
+                    responded_by: userAdminNama || 'Admin',
+                    responded_at: new Date().toISOString(),
+                    notes: catatan || null
+                }).eq('id', idIzin);
+
+                if (error) return { success: false, message: error.message };
+                return { success: true, message: 'Izin BBM berhasil ' + (isApprove ? 'disetujui.' : 'ditolak.') };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- BBM TRANSACTIONS (CRUD) ---
+        submitPengisianBBM: async function(payload, base64Km, base64Struk, base64Muatan, currentUser, base64Muatan2) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const noPlat = (payload.no_plat || payload.plate_number || '').trim().toUpperCase();
+                const kmSaatIni = parseInt(String(payload.km_saat_ini || 0).replace(/[^0-9]/g, ''), 10) || 0;
+                const kmSebelumnya = parseInt(String(payload.km_sebelumnya || 0).replace(/[^0-9]/g, ''), 10) || 0;
+                const jumlahLiter = parseFloat(payload.jumlah_liter) || 0;
+                const totalBiaya = parseInt(String(payload.total_biaya || 0).replace(/[^0-9]/g, ''), 10) || 0;
+
+                // VALIDASI ODOMETER ANTI-CURANG
+                if (kmSebelumnya > 0 && kmSaatIni <= kmSebelumnya) {
+                    return {
+                        success: false,
+                        message: 'Kilometer saat ini lebih kecil atau sama dengan kilometer sebelumnya!'
+                    };
+                }
+
+                const jarakTempuh = Math.max(0, kmSaatIni - kmSebelumnya);
+                const konsumsiKmL = (jumlahLiter > 0 && jarakTempuh > 0) ? parseFloat((jarakTempuh / jumlahLiter).toFixed(2)) : 0;
+
+                // Upload foto bukti ke Google Drive Edge CDN (lh3)
+                let urlKm = '';
+                let urlStruk = '';
+                let urlMuatan = '';
+
+                if (base64Km && base64Km.length > 50) {
+                    urlKm = await uploadToGoogleDriveCdn(base64Km, 'BBM_KM_' + noPlat);
+                }
+                if (base64Struk && base64Struk.length > 50) {
+                    urlStruk = await uploadToGoogleDriveCdn(base64Struk, 'BBM_STRUK_' + noPlat);
+                }
+                if (base64Muatan && base64Muatan.length > 50) {
+                    urlMuatan = await uploadToGoogleDriveCdn(base64Muatan, 'BBM_MUATAN_' + noPlat);
+                }
+
+                const now = new Date();
+                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                const yy = String(wita.getFullYear()).slice(-2);
+                const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                const dd = String(wita.getDate()).padStart(2, '0');
+                const rnd = Math.floor(100 + Math.random() * 900);
+                const idBbm = 'BBM-' + yy + mm + dd + '-' + rnd;
+
+                const tglBBM = payload.tanggal || new Date().toISOString().split('T')[0];
+
+                const { error } = await sb.from('fuel_logs').insert([{
+                    id: idBbm,
+                    fuel_date: tglBBM,
+                    plate_number: noPlat,
+                    driver_id: payload.id_sopir || payload.driver_id || (currentUser ? currentUser.id_user || currentUser.user_id : 'DRV'),
+                    driver_name: payload.nama_sopir || payload.driver_name || (currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Sopir'),
+                    current_km: kmSaatIni,
+                    prev_km: kmSebelumnya,
+                    trip_distance: jarakTempuh,
+                    liters: jumlahLiter,
+                    total_cost: totalBiaya,
+                    efficiency_ratio: konsumsiKmL,
+                    gas_station: payload.nama_spbu || payload.gas_station || '',
+                    fuel_type: payload.jenis_bbm || payload.fuel_type || 'Solar',
+                    km_photo_url: urlKm,
+                    receipt_photo_url: urlStruk,
+                    cargo_photo_url: urlMuatan,
+                    notes: payload.catatan || payload.notes || null
+                }]);
+
+                if (error) return { success: false, message: error.message };
+
+                // Sinkronisasi data ke Master Kendaraan
+                if (noPlat) {
+                    const { data: vRow } = await sb.from('vehicles').select('*').eq('plate_number', noPlat).maybeSingle();
+                    if (vRow) {
+                        const newCurrentKm = Math.max(Number(vRow.current_km || 0), kmSaatIni);
+                        const newTotalLiters = (Number(vRow.total_fuel_liters || 0)) + jumlahLiter;
+                        const interval = Number(vRow.oil_interval_km || 5000);
+                        const baseOilKm = Number(vRow.last_oil_km || 0);
+                        const remaining = (baseOilKm + interval) - newCurrentKm;
+                        let statusOli = 'Oli Aman';
+                        if (remaining <= 500) statusOli = 'WAJIB GANTI OLI';
+                        else if (remaining <= 2000) statusOli = 'Segera Ganti Oli';
+
+                        await sb.from('vehicles').update({
+                            current_km: newCurrentKm,
+                            last_fuel_date: tglBBM,
+                            total_fuel_liters: newTotalLiters,
+                            remaining_oil_km: remaining,
+                            oil_status: statusOli
+                        }).eq('plate_number', noPlat);
+                    }
+                }
+
+                // Tandai izin BBM sudah digunakan jika ada id_izin
+                if (payload.id_izin) {
+                    await sb.from('fuel_approvals').update({ is_used: 'Ya' }).eq('id', payload.id_izin);
+                }
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'SYSTEM',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Sopir',
+                    currentUser ? currentUser.role : 'Sopir',
+                    'INPUT_BBM',
+                    'Mencatat BBM ' + idBbm + ' (' + noPlat + ', ' + jumlahLiter + ' L, KM ' + kmSaatIni + ')'
+                );
+
+                return {
+                    success: true,
+                    message: 'Data pengisian BBM berhasil disimpan!',
+                    jarak_tempuh: jarakTempuh,
+                    rata_rata_konsumsi: konsumsiKmL,
+                    km_saat_ini: kmSaatIni
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        editBBMTransaction: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const idBBM = (payload.id_bbm || '').trim();
+                if (!idBBM) return { success: false, message: 'ID Transaksi BBM tidak valid!' };
+
+                const { data: existing, error: getErr } = await sb.from('fuel_logs').select('*').eq('id', idBBM).maybeSingle();
+                if (getErr || !existing) return { success: false, message: 'Transaksi BBM ' + idBBM + ' tidak ditemukan!' };
+
+                const noPlat = (payload.no_plat || existing.plate_number || '').trim().toUpperCase();
+                const kmSaatIni = parseInt(String(payload.km_saat_ini || existing.current_km || 0).replace(/[^0-9]/g, ''), 10);
+                const kmSebelumnya = parseInt(String(payload.km_sebelumnya || existing.prev_km || 0).replace(/[^0-9]/g, ''), 10);
+                const jumlahLiter = parseFloat(payload.jumlah_liter !== undefined ? payload.jumlah_liter : existing.liters) || 0;
+                const totalBiaya = parseInt(String(payload.total_biaya !== undefined ? payload.total_biaya : existing.total_cost || 0).replace(/[^0-9]/g, ''), 10);
+                const jarakTempuh = Math.max(0, kmSaatIni - kmSebelumnya);
+                const konsumsiKmL = (jumlahLiter > 0 && jarakTempuh > 0) ? parseFloat((jarakTempuh / jumlahLiter).toFixed(2)) : 0;
+
+                const updateObj = {
+                    plate_number: noPlat,
+                    current_km: kmSaatIni,
+                    prev_km: kmSebelumnya,
+                    trip_distance: jarakTempuh,
+                    liters: jumlahLiter,
+                    total_cost: totalBiaya,
+                    efficiency_ratio: konsumsiKmL
+                };
+
+                if (payload.tanggal) updateObj.fuel_date = payload.tanggal;
+                if (payload.nama_sopir) updateObj.driver_name = payload.nama_sopir;
+                if (payload.nama_spbu) updateObj.gas_station = payload.nama_spbu;
+                if (payload.jenis_bbm) updateObj.fuel_type = payload.jenis_bbm;
+                if (payload.catatan !== undefined) updateObj.notes = payload.catatan;
+
+                // Handle replacement photos
+                if (payload.base64_foto_km && payload.base64_foto_km.length > 50) {
+                    updateObj.km_photo_url = await uploadToGoogleDriveCdn(payload.base64_foto_km, 'BBM_KM_' + idBBM);
+                }
+                if (payload.base64_foto_struk && payload.base64_foto_struk.length > 50) {
+                    updateObj.receipt_photo_url = await uploadToGoogleDriveCdn(payload.base64_foto_struk, 'BBM_STRUK_' + idBBM);
+                }
+                if (payload.base64_foto_muatan && payload.base64_foto_muatan.length > 50) {
+                    updateObj.cargo_photo_url = await uploadToGoogleDriveCdn(payload.base64_foto_muatan, 'BBM_MUATAN_' + idBBM);
+                }
+
+                const { error: updErr } = await sb.from('fuel_logs').update(updateObj).eq('id', idBBM);
+                if (updErr) return { success: false, message: updErr.message };
+
+                // Recalculate vehicle metrics
+                if (noPlat) {
+                    const { data: allLogs } = await sb.from('fuel_logs').select('current_km, liters').eq('plate_number', noPlat);
+                    let maxKm = 0;
+                    let totL = 0;
+                    (allLogs || []).forEach(l => {
+                        if (Number(l.current_km || 0) > maxKm) maxKm = Number(l.current_km || 0);
+                        totL += Number(l.liters || 0);
+                    });
+
+                    await sb.from('vehicles').update({
+                        current_km: maxKm,
+                        total_fuel_liters: totL
+                    }).eq('plate_number', noPlat);
+                }
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'EDIT_BBM',
+                    'Mengedit transaksi BBM ' + idBBM + ' (' + noPlat + ', ' + jumlahLiter + 'L, KM ' + kmSaatIni + ')'
+                );
+
+                return { success: true, message: 'Transaksi BBM ' + idBBM + ' berhasil diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteBBMTransaction: async function(idBBM, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                idBBM = (idBBM || '').trim();
+                if (!idBBM) return { success: false, message: 'ID Transaksi BBM tidak valid!' };
+
+                const { data: existing } = await sb.from('fuel_logs').select('plate_number').eq('id', idBBM).maybeSingle();
+                const noPlat = existing ? existing.plate_number : null;
+
+                const { error } = await sb.from('fuel_logs').delete().eq('id', idBBM);
+                if (error) return { success: false, message: error.message };
+
+                // Sync ulang data kendaraan
+                if (noPlat) {
+                    const { data: allLogs } = await sb.from('fuel_logs').select('current_km, liters').eq('plate_number', noPlat);
+                    let maxKm = 0;
+                    let totL = 0;
+                    (allLogs || []).forEach(l => {
+                        if (Number(l.current_km || 0) > maxKm) maxKm = Number(l.current_km || 0);
+                        totL += Number(l.liters || 0);
+                    });
+
+                    await sb.from('vehicles').update({
+                        current_km: maxKm,
+                        total_fuel_liters: totL
+                    }).eq('plate_number', noPlat);
+                }
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'DELETE_BBM',
+                    'Menghapus transaksi BBM ' + idBBM
+                );
+
+                return { success: true, message: 'Transaksi BBM ' + idBBM + ' berhasil dihapus!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- OLI TRANSACTIONS (CRUD) ---
+        submitInputOli: async function(payload, base64Km, base64Nota, currentUser, base64Bayar1, base64Bayar2) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const noPlat = (payload.no_plat || payload.plate_number || '').trim().toUpperCase();
+                const kmSaatGanti = parseInt(String(payload.km_saat_ini || payload.km_saat_ganti || 0).replace(/[^0-9]/g, ''), 10) || 0;
+                const totalBiaya = parseInt(String(payload.total_biaya || 0).replace(/[^0-9]/g, ''), 10) || 0;
+                const jenisTransaksi = payload.jenis_transaksi || 'Ganti Oli';
+                const jumlahLiter = parseFloat(payload.jumlah_liter) || 0;
+
+                let urlKm = '';
+                let urlNota = '';
+
+                if (base64Km && base64Km.length > 50) {
+                    urlKm = await uploadToGoogleDriveCdn(base64Km, 'OLI_KM_' + noPlat);
+                }
+                if (base64Nota && base64Nota.length > 50) {
+                    urlNota = await uploadToGoogleDriveCdn(base64Nota, 'OLI_NOTA_' + noPlat);
+                }
+
+                const now = new Date();
+                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                const yy = String(wita.getFullYear()).slice(-2);
+                const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                const dd = String(wita.getDate()).padStart(2, '0');
+                const rnd = Math.floor(100 + Math.random() * 900);
+                const idOli = 'OLI-' + yy + mm + dd + '-' + rnd;
+
+                const tglOli = payload.tanggal || new Date().toISOString().split('T')[0];
+
+                const { error } = await sb.from('oil_change_logs').insert([{
+                    id: idOli,
+                    service_date: tglOli,
+                    plate_number: noPlat,
+                    driver_id: payload.id_sopir || (currentUser ? currentUser.id_user || currentUser.user_id : 'DRV'),
+                    driver_name: payload.nama_sopir || (currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Sopir'),
+                    service_km: kmSaatGanti,
+                    transaction_type: jenisTransaksi,
+                    oil_brand: payload.merek_oli || '',
+                    liters: jumlahLiter,
+                    total_cost: totalBiaya,
+                    workshop_name: payload.nama_bengkel || '',
+                    km_photo_url: urlKm,
+                    receipt_photo_url: urlNota,
+                    notes: payload.catatan || null
+                }]);
+
+                if (error) return { success: false, message: error.message };
+
+                // Update Master Kendaraan
+                if (noPlat) {
+                    const { data: vRow } = await sb.from('vehicles').select('*').eq('plate_number', noPlat).maybeSingle();
+                    if (vRow) {
+                        const newCurrentKm = Math.max(Number(vRow.current_km || 0), kmSaatGanti);
+                        const interval = Number(vRow.oil_interval_km || 5000);
+                        let newLastOilKm = Number(vRow.last_oil_km || 0);
+
+                        if (jenisTransaksi === 'Ganti Oli') {
+                            newLastOilKm = kmSaatGanti;
+                        }
+
+                        const remaining = (newLastOilKm + interval) - newCurrentKm;
+                        let statusOli = 'Oli Aman';
+                        if (remaining <= 500) statusOli = 'WAJIB GANTI OLI';
+                        else if (remaining <= 2000) statusOli = 'Segera Ganti Oli';
+
+                        await sb.from('vehicles').update({
+                            current_km: newCurrentKm,
+                            last_oil_km: newLastOilKm,
+                            remaining_oil_km: remaining,
+                            oil_status: statusOli
+                        }).eq('plate_number', noPlat);
+                    }
+                }
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'SYSTEM',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Sopir',
+                    'Sopir',
+                    'INPUT_OLI',
+                    'Mencatat riwayat oli ' + idOli + ' (' + noPlat + ', ' + jenisTransaksi + ', ' + totalBiaya + ')'
+                );
+
+                return { success: true, message: 'Data riwayat oli berhasil disimpan!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        editOliTransaction: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const idOli = (payload.id_oli || '').trim();
+                if (!idOli) return { success: false, message: 'ID Transaksi Oli tidak valid!' };
+
+                const { data: existing, error: getErr } = await sb.from('oil_change_logs').select('*').eq('id', idOli).maybeSingle();
+                if (getErr || !existing) return { success: false, message: 'Transaksi Oli ' + idOli + ' tidak ditemukan!' };
+
+                const noPlat = (payload.no_plat || existing.plate_number || '').trim().toUpperCase();
+                const kmSaatGanti = parseInt(String(payload.km_saat_ganti || existing.service_km || 0).replace(/[^0-9]/g, ''), 10);
+                const jenisTransaksi = payload.jenis_transaksi || existing.transaction_type || 'Ganti Oli';
+                const totalBiaya = parseInt(String(payload.total_biaya !== undefined ? payload.total_biaya : existing.total_cost || 0).replace(/[^0-9]/g, ''), 10);
+                const jumlahLiter = parseFloat(payload.jumlah_liter !== undefined ? payload.jumlah_liter : existing.liters) || 0;
+
+                const updateObj = {
+                    plate_number: noPlat,
+                    service_km: kmSaatGanti,
+                    transaction_type: jenisTransaksi,
+                    total_cost: totalBiaya,
+                    liters: jumlahLiter
+                };
+
+                if (payload.tanggal) updateObj.service_date = payload.tanggal;
+                if (payload.nama_sopir) updateObj.driver_name = payload.nama_sopir;
+                if (payload.merek_oli !== undefined) updateObj.oil_brand = payload.merek_oli;
+                if (payload.nama_bengkel !== undefined) updateObj.workshop_name = payload.nama_bengkel;
+                if (payload.catatan !== undefined) updateObj.notes = payload.catatan;
+
+                if (payload.base64_foto_km && payload.base64_foto_km.length > 50) {
+                    updateObj.km_photo_url = await uploadToGoogleDriveCdn(payload.base64_foto_km, 'OLI_KM_' + idOli);
+                }
+                if (payload.base64_foto_nota && payload.base64_foto_nota.length > 50) {
+                    updateObj.receipt_photo_url = await uploadToGoogleDriveCdn(payload.base64_foto_nota, 'OLI_NOTA_' + idOli);
+                }
+
+                const { error: updErr } = await sb.from('oil_change_logs').update(updateObj).eq('id', idOli);
+                if (updErr) return { success: false, message: updErr.message };
+
+                // Recalculate oil status for this vehicle
+                if (noPlat) {
+                    const { data: latestOil } = await sb.from('oil_change_logs')
+                        .select('service_km')
+                        .eq('plate_number', noPlat)
+                        .eq('transaction_type', 'Ganti Oli')
+                        .order('service_km', { ascending: false })
+                        .limit(1);
+
+                    const maxOilKm = latestOil && latestOil.length > 0 ? Number(latestOil[0].service_km || 0) : 0;
+                    if (maxOilKm > 0) {
+                        const { data: vRow } = await sb.from('vehicles').select('*').eq('plate_number', noPlat).maybeSingle();
+                        if (vRow) {
+                            const interval = Number(vRow.oil_interval_km || 5000);
+                            const curKm = Number(vRow.current_km || 0);
+                            const remaining = (maxOilKm + interval) - curKm;
+                            let statusOli = 'Oli Aman';
+                            if (remaining <= 500) statusOli = 'WAJIB GANTI OLI';
+                            else if (remaining <= 2000) statusOli = 'Segera Ganti Oli';
+
+                            await sb.from('vehicles').update({
+                                last_oil_km: maxOilKm,
+                                remaining_oil_km: remaining,
+                                oil_status: statusOli
+                            }).eq('plate_number', noPlat);
+                        }
+                    }
+                }
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'EDIT_OLI',
+                    'Mengedit transaksi Oli ' + idOli + ' (' + noPlat + ', ' + jenisTransaksi + ')'
+                );
+
+                return { success: true, message: 'Transaksi Oli ' + idOli + ' berhasil diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteOliTransaction: async function(idOli, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                idOli = (idOli || '').trim();
+                if (!idOli) return { success: false, message: 'ID Transaksi Oli tidak valid!' };
+
+                const { data: existing } = await sb.from('oil_change_logs').select('plate_number').eq('id', idOli).maybeSingle();
+                const noPlat = existing ? existing.plate_number : null;
+
+                const { error } = await sb.from('oil_change_logs').delete().eq('id', idOli);
+                if (error) return { success: false, message: error.message };
+
+                // Recalculate oil status for this vehicle
+                if (noPlat) {
+                    const { data: latestOil } = await sb.from('oil_change_logs')
+                        .select('service_km')
+                        .eq('plate_number', noPlat)
+                        .eq('transaction_type', 'Ganti Oli')
+                        .order('service_km', { ascending: false })
+                        .limit(1);
+
+                    const maxOilKm = latestOil && latestOil.length > 0 ? Number(latestOil[0].service_km || 0) : 0;
+                    const { data: vRow } = await sb.from('vehicles').select('*').eq('plate_number', noPlat).maybeSingle();
+                    if (vRow) {
+                        const interval = Number(vRow.oil_interval_km || 5000);
+                        const curKm = Number(vRow.current_km || 0);
+                        const remaining = (maxOilKm + interval) - curKm;
+                        let statusOli = 'Oli Aman';
+                        if (remaining <= 500) statusOli = 'WAJIB GANTI OLI';
+                        else if (remaining <= 2000) statusOli = 'Segera Ganti Oli';
+
+                        await sb.from('vehicles').update({
+                            last_oil_km: maxOilKm,
+                            remaining_oil_km: remaining,
+                            oil_status: statusOli
+                        }).eq('plate_number', noPlat);
+                    }
+                }
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'DELETE_OLI',
+                    'Menghapus transaksi Oli ' + idOli
+                );
+
+                return { success: true, message: 'Transaksi Oli berhasil dihapus.' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        updateBatasIntervalOli: async function(noPlat, intervalKm, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const interval = parseInt(String(intervalKm).replace(/[^0-9]/g, ''), 10);
+                if (!interval || interval <= 0) {
+                    return { success: false, message: 'Interval KM harus berupa angka positif!' };
+                }
+
+                const cleanPlat = (noPlat || '').trim().toUpperCase();
+                const { data: vRow } = await sb.from('vehicles').select('*').eq('plate_number', cleanPlat).maybeSingle();
+                if (!vRow) return { success: false, message: 'Kendaraan ' + cleanPlat + ' tidak ditemukan!' };
+
+                const curKm = Number(vRow.current_km || 0);
+                const baseOilKm = Number(vRow.last_oil_km || 0);
+                const remaining = (baseOilKm + interval) - curKm;
+                let statusOli = 'Oli Aman';
+                if (remaining <= 500) statusOli = 'WAJIB GANTI OLI';
+                else if (remaining <= 2000) statusOli = 'Segera Ganti Oli';
+
+                const { error } = await sb.from('vehicles').update({
+                    oil_interval_km: interval,
+                    remaining_oil_km: remaining,
+                    oil_status: statusOli
+                }).eq('plate_number', cleanPlat);
+
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'UPDATE_INTERVAL_OLI',
+                    'Mengubah interval oli ' + cleanPlat + ' menjadi ' + interval + ' KM'
+                );
+
+                return { success: true, message: 'Interval ganti oli untuk ' + cleanPlat + ' berhasil diperbarui menjadi ' + interval + ' KM!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- SERVICE TRANSACTIONS (CRUD) ---
+        submitInputService: async function(payload, base64Nota, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const noPlat = (payload.no_plat || payload.plate_number || '').trim().toUpperCase();
+                const biayaPerbaikan = parseInt(String(payload.biaya_perbaikan || 0).replace(/[^0-9]/g, ''), 10) || 0;
+                if (!biayaPerbaikan || biayaPerbaikan <= 0) {
+                    return { success: false, message: 'Biaya perbaikan wajib diisi!' };
+                }
+
+                const kmSaatIni = parseInt(String(payload.km_saat_ini || 0).replace(/[^0-9]/g, ''), 10) || 0;
+
+                // Upload nota ke Google Drive Edge CDN (lh3)
+                let urlNota = '';
+                if (Array.isArray(base64Nota)) {
+                    const urls = [];
+                    for (const b of base64Nota) {
+                        if (b && b.length > 50) {
+                            const u = await uploadToGoogleDriveCdn(b, 'SRV_NOTA_' + noPlat);
+                            if (u) urls.push(u);
+                        }
+                    }
+                    urlNota = urls.join('|||');
+                } else if (typeof base64Nota === 'string' && base64Nota.length > 50) {
+                    urlNota = await uploadToGoogleDriveCdn(base64Nota, 'SRV_NOTA_' + noPlat);
+                }
+
+                const now = new Date();
+                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                const yy = String(wita.getFullYear()).slice(-2);
+                const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                const dd = String(wita.getDate()).padStart(2, '0');
+                const rnd = Math.floor(100 + Math.random() * 900);
+                const idServis = 'SRV-' + yy + mm + dd + '-' + rnd;
+
+                const tglServis = payload.tanggal || new Date().toISOString().split('T')[0];
+
+                const { error } = await sb.from('vehicle_services').insert([{
+                    id: idServis,
+                    service_date: tglServis,
+                    plate_number: noPlat,
+                    driver_id: payload.id_sopir || (currentUser ? currentUser.id_user || currentUser.user_id : 'DRV'),
+                    driver_name: payload.nama_sopir || (currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Sopir'),
+                    current_km: kmSaatIni,
+                    workshop_name: payload.nama_bengkel || '',
+                    cost: biayaPerbaikan,
+                    repair_details: payload.catatan_perbaikan || '',
+                    receipt_photo_url: urlNota
+                }]);
+
+                if (error) return { success: false, message: error.message };
+
+                // Update KM mobil jika lebih tinggi
+                if (noPlat && kmSaatIni > 0) {
+                    const { data: vRow } = await sb.from('vehicles').select('*').eq('plate_number', noPlat).maybeSingle();
+                    if (vRow && kmSaatIni > Number(vRow.current_km || 0)) {
+                        const interval = Number(vRow.oil_interval_km || 5000);
+                        const baseOilKm = Number(vRow.last_oil_km || 0);
+                        const remaining = (baseOilKm + interval) - kmSaatIni;
+                        let statusOli = 'Oli Aman';
+                        if (remaining <= 500) statusOli = 'WAJIB GANTI OLI';
+                        else if (remaining <= 2000) statusOli = 'Segera Ganti Oli';
+
+                        await sb.from('vehicles').update({
+                            current_km: kmSaatIni,
+                            remaining_oil_km: remaining,
+                            oil_status: statusOli
+                        }).eq('plate_number', noPlat);
+                    }
+                }
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'SYSTEM',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Sopir',
+                    'Sopir',
+                    'INPUT_SERVICE',
+                    'Mencatat servis ' + idServis + ' (' + noPlat + ', ' + biayaPerbaikan + ')'
+                );
+
+                return { success: true, message: 'Riwayat servis kendaraan berhasil disimpan!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        editServiceTransaction: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const idService = (payload.id_service || '').trim();
+                if (!idService) return { success: false, message: 'ID Servis tidak valid!' };
+
+                const { data: existing, error: getErr } = await sb.from('vehicle_services').select('*').eq('id', idService).maybeSingle();
+                if (getErr || !existing) return { success: false, message: 'Transaksi perbaikan/servis ' + idService + ' tidak ditemukan!' };
+
+                const noPlat = (payload.no_plat || existing.plate_number || '').trim().toUpperCase();
+                const kmSaatIni = parseInt(String(payload.km_saat_ini !== undefined ? payload.km_saat_ini : existing.current_km || 0).replace(/[^0-9]/g, ''), 10);
+                const biayaPerbaikan = parseInt(String(payload.biaya_perbaikan !== undefined ? payload.biaya_perbaikan : existing.cost || 0).replace(/[^0-9]/g, ''), 10);
+
+                const updateObj = {
+                    plate_number: noPlat,
+                    current_km: kmSaatIni,
+                    cost: biayaPerbaikan
+                };
+
+                if (payload.tanggal) updateObj.service_date = payload.tanggal;
+                if (payload.nama_sopir) updateObj.driver_name = payload.nama_sopir;
+                if (payload.nama_bengkel !== undefined) updateObj.workshop_name = payload.nama_bengkel;
+                if (payload.catatan_perbaikan !== undefined) updateObj.repair_details = payload.catatan_perbaikan;
+
+                if (payload.base64_foto_nota && payload.base64_foto_nota.length > 50) {
+                    updateObj.receipt_photo_url = await uploadToGoogleDriveCdn(payload.base64_foto_nota, 'SRV_NOTA_' + idService);
+                }
+
+                const { error: updErr } = await sb.from('vehicle_services').update(updateObj).eq('id', idService);
+                if (updErr) return { success: false, message: updErr.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'EDIT_SERVICE',
+                    'Mengedit transaksi perbaikan/servis ' + idService + ' (' + noPlat + ', ' + biayaPerbaikan + ')'
+                );
+
+                return { success: true, message: 'Transaksi servis ' + idService + ' berhasil diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteServiceTransaction: async function(idService, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                idService = (idService || '').trim();
+                if (!idService) return { success: false, message: 'ID Servis tidak valid!' };
+
+                const { error } = await sb.from('vehicle_services').delete().eq('id', idService);
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'DELETE_SERVICE',
+                    'Menghapus transaksi perbaikan/servis ' + idService
+                );
+
+                return { success: true, message: 'Transaksi perbaikan/servis ' + idService + ' berhasil dihapus!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- MASTER DATA RELATIONS (SPBU, BENGKEL, OLI, VEHICLES, SOPIR) ---
+        getSpbuList: async function() {
+            const sb = getClient();
+            const defaultSpbu = [
+                'SPBU Balikpapan',
+                'SPBU Loa Kulu',
+                'SPBU Samarinda',
+                'SPBU Tenggarong',
+                'SPBU KM 13',
+                'SPBU Kebun Sayur',
+                'SPBU Karang Anyar'
+            ];
+            if (!sb) return { success: true, data: defaultSpbu };
+            try {
+                const listSet = new Set(defaultSpbu);
+                const { data: bbmLogs } = await sb.from('fuel_logs').select('gas_station');
+                (bbmLogs || []).forEach(b => {
+                    if (b.gas_station && b.gas_station.trim()) listSet.add(b.gas_station.trim());
+                });
+
+                // Deleted list
+                const { data: cfg } = await sb.from('system_configs').select('value').eq('key', 'DELETED_SPBU_LIST').maybeSingle();
+                let deleted = [];
+                if (cfg && cfg.value) {
+                    try { deleted = JSON.parse(cfg.value); } catch(e){}
+                }
+                const delSet = new Set((deleted || []).map(x => String(x || '').toLowerCase().trim()));
+
+                const result = Array.from(listSet).filter(p => p && !delSet.has(p.toLowerCase().trim())).sort((a, b) => a.localeCompare(b));
+                return { success: true, data: result };
+            } catch (err) {
+                return { success: true, data: defaultSpbu };
+            }
+        },
+
+        deleteSpbuItemServer: async function(nama) {
+            const sb = getClient();
+            if (!sb || !nama) return { success: true };
+            try {
+                const cleanNama = String(nama).trim();
+                const { data: cfg } = await sb.from('system_configs').select('value').eq('key', 'DELETED_SPBU_LIST').maybeSingle();
+                let deleted = [];
+                if (cfg && cfg.value) {
+                    try { deleted = JSON.parse(cfg.value); } catch(e){}
+                }
+                if (!deleted.some(x => String(x).toLowerCase() === cleanNama.toLowerCase())) {
+                    deleted.push(cleanNama);
+                    await sb.from('system_configs').upsert({
+                        key: 'DELETED_SPBU_LIST',
+                        value: JSON.stringify(deleted),
+                        description: 'Daftar SPBU yang dihapus oleh admin'
+                    });
+                }
+                return { success: true };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        getBengkelList: async function() {
+            const sb = getClient();
+            const defaultBengkel = [
+                'Bengkel Jaya Abadi',
+                'Bengkel Sejahtera',
+                'Bengkel Auto2000',
+                'Bengkel Tamara Motor',
+                'Bengkel Maju Bersama'
+            ];
+            if (!sb) return { success: true, data: defaultBengkel };
+            try {
+                const listSet = new Set(defaultBengkel);
+                const [srvRes, oliRes] = await Promise.all([
+                    sb.from('vehicle_services').select('workshop_name'),
+                    sb.from('oil_change_logs').select('workshop_name')
+                ]);
+
+                (srvRes.data || []).forEach(s => {
+                    if (s.workshop_name && s.workshop_name.trim()) listSet.add(s.workshop_name.trim());
+                });
+                (oliRes.data || []).forEach(o => {
+                    if (o.workshop_name && o.workshop_name.trim()) listSet.add(o.workshop_name.trim());
+                });
+
+                const { data: cfg } = await sb.from('system_configs').select('value').eq('key', 'DELETED_BENGKEL_LIST').maybeSingle();
+                let deleted = [];
+                if (cfg && cfg.value) {
+                    try { deleted = JSON.parse(cfg.value); } catch(e){}
+                }
+                const delSet = new Set((deleted || []).map(x => String(x || '').toLowerCase().trim()));
+
+                const result = Array.from(listSet).filter(b => b && !delSet.has(b.toLowerCase().trim())).sort((a, b) => a.localeCompare(b));
+                return { success: true, data: result };
+            } catch (err) {
+                return { success: true, data: defaultBengkel };
+            }
+        },
+
+        deleteBengkelItemServer: async function(nama) {
+            const sb = getClient();
+            if (!sb || !nama) return { success: true };
+            try {
+                const cleanNama = String(nama).trim();
+                const { data: cfg } = await sb.from('system_configs').select('value').eq('key', 'DELETED_BENGKEL_LIST').maybeSingle();
+                let deleted = [];
+                if (cfg && cfg.value) {
+                    try { deleted = JSON.parse(cfg.value); } catch(e){}
+                }
+                if (!deleted.some(x => String(x).toLowerCase() === cleanNama.toLowerCase())) {
+                    deleted.push(cleanNama);
+                    await sb.from('system_configs').upsert({
+                        key: 'DELETED_BENGKEL_LIST',
+                        value: JSON.stringify(deleted),
+                        description: 'Daftar Bengkel yang dihapus oleh admin'
+                    });
+                }
+                return { success: true };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        getMerekOliList: async function() {
+            const sb = getClient();
+            const defaultOli = [
+                'Shell Helix HX7 10W-40',
+                'Pertamina Fastron 10W-40',
+                'Pertamina Meditran SX 15W-40',
+                'Castrol Magnatec 10W-40',
+                'Total Quartz 7000 10W-40',
+                'Mobil Super 2000 10W-40',
+                'Idemitsu 10W-40',
+                'Evalube Super Transco 15W-40'
+            ];
+            if (!sb) return defaultOli;
+            try {
+                const listSet = new Set(defaultOli);
+                const { data: oliLogs } = await sb.from('oil_change_logs').select('oil_brand');
+                (oliLogs || []).forEach(o => {
+                    if (o.oil_brand && o.oil_brand.trim()) listSet.add(o.oil_brand.trim());
+                });
+
+                const { data: cfg } = await sb.from('system_configs').select('value').eq('key', 'DELETED_MEREK_OLI_LIST').maybeSingle();
+                let deleted = [];
+                if (cfg && cfg.value) {
+                    try { deleted = JSON.parse(cfg.value); } catch(e){}
+                }
+                const delSet = new Set((deleted || []).map(x => String(x || '').toLowerCase().trim()));
+
+                const result = Array.from(listSet).filter(m => m && !delSet.has(m.toLowerCase().trim())).sort((a, b) => a.localeCompare(b));
+                return result;
+            } catch (err) {
+                return defaultOli;
+            }
+        },
+
+        deleteMerekOliItemServer: async function(nama) {
+            const sb = getClient();
+            if (!sb || !nama) return { success: true };
+            try {
+                const cleanNama = String(nama).trim();
+                const { data: cfg } = await sb.from('system_configs').select('value').eq('key', 'DELETED_MEREK_OLI_LIST').maybeSingle();
+                let deleted = [];
+                if (cfg && cfg.value) {
+                    try { deleted = JSON.parse(cfg.value); } catch(e){}
+                }
+                if (!deleted.some(x => String(x).toLowerCase() === cleanNama.toLowerCase())) {
+                    deleted.push(cleanNama);
+                    await sb.from('system_configs').upsert({
+                        key: 'DELETED_MEREK_OLI_LIST',
+                        value: JSON.stringify(deleted),
+                        description: 'Daftar Merek Oli yang dihapus oleh admin'
+                    });
+                }
+                return { success: true };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        saveNewMasterVehicle: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const noPlat = (payload.no_plat || '').trim().toUpperCase();
+                if (!noPlat) return { success: false, message: 'Nomor Plat Kendaraan wajib diisi!' };
+
+                const jenisMobil = (payload.jenis_mobil || 'Mobil').trim();
+                const sopirDefault = (payload.sopir_default || (currentUser ? currentUser.nama : 'Sopir')).trim();
+                const kmAwal = parseInt(String(payload.km_awal || 0).replace(/[^0-9]/g, ''), 10) || 0;
+                const intervalOli = parseInt(String(payload.interval_oli || 5000).replace(/[^0-9]/g, ''), 10) || 5000;
+
+                // Cek duplikasi nomor plat
+                const { data: existing } = await sb.from('vehicles').select('id').eq('plate_number', noPlat).maybeSingle();
+                if (existing) {
+                    return { success: false, message: 'Nomor Plat ' + noPlat + ' sudah terdaftar di sistem!' };
+                }
+
+                const newId = 'KND-' + Date.now().toString().slice(-4);
+                const { error } = await sb.from('vehicles').insert([{
+                    id: newId,
+                    plate_number: noPlat,
+                    vehicle_type: jenisMobil,
+                    default_driver: sopirDefault,
+                    current_km: kmAwal,
+                    last_fuel_date: null,
+                    total_fuel_liters: 0,
+                    last_oil_km: kmAwal,
+                    oil_interval_km: intervalOli,
+                    oil_status: 'Oli Aman',
+                    remaining_oil_km: intervalOli,
+                    status: 'true'
+                }]);
+
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'TAMBAH_KENDARAAN',
+                    'Menambahkan armada baru: ' + noPlat + ' (' + jenisMobil + ', Sopir: ' + sopirDefault + ', KM Awal: ' + kmAwal + ')'
+                );
+
+                return { success: true, message: 'Kendaraan ' + noPlat + ' berhasil ditambahkan!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        editVehicleFromRekap: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const noPlat = (payload.no_plat || '').trim().toUpperCase();
+                if (!noPlat) return { success: false, message: 'Nomor Plat Kendaraan tidak valid!' };
+
+                const { data: existing } = await sb.from('vehicles').select('*').eq('plate_number', noPlat).maybeSingle();
+                if (!existing) return { success: false, message: 'Kendaraan ' + noPlat + ' tidak ditemukan di database!' };
+
+                const jenisMobil = (payload.jenis_mobil || existing.vehicle_type || 'Mobil').trim();
+                const sopirDefault = (payload.sopir_default || existing.default_driver || '-').trim();
+                const interval = parseInt(String(payload.interval_oli || existing.oil_interval_km || 5000).replace(/[^0-9]/g, ''), 10) || 5000;
+                const statusAktif = (payload.status_aktif !== undefined ? String(payload.status_aktif) : existing.status);
+
+                const curKm = Number(existing.current_km || 0);
+                const lastOilKm = Number(existing.last_oil_km || 0);
+                const remaining = (lastOilKm + interval) - curKm;
+                let statusOli = 'Oli Aman';
+                if (remaining <= 500) statusOli = 'WAJIB GANTI OLI';
+                else if (remaining <= 2000) statusOli = 'Segera Ganti Oli';
+
+                const { error } = await sb.from('vehicles').update({
+                    vehicle_type: jenisMobil,
+                    default_driver: sopirDefault,
+                    oil_interval_km: interval,
+                    remaining_oil_km: remaining,
+                    oil_status: statusOli,
+                    status: (statusAktif === 'true' || statusAktif === true || statusAktif === 'Aktif') ? 'true' : 'false'
+                }).eq('plate_number', noPlat);
+
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'EDIT_KENDARAAN',
+                    'Mengedit data kendaraan ' + noPlat + ' (' + jenisMobil + ', Sopir: ' + sopirDefault + ', Interval: ' + interval + ' KM)'
+                );
+
+                return { success: true, message: 'Data kendaraan ' + noPlat + ' berhasil diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteVehicleFromRekap: async function(noPlat, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                noPlat = (noPlat || '').trim().toUpperCase();
+                if (!noPlat) return { success: false, message: 'Nomor Plat tidak valid!' };
+
+                const { error } = await sb.from('vehicles').delete().eq('plate_number', noPlat);
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'DELETE_KENDARAAN',
+                    'Menghapus master kendaraan ' + noPlat
+                );
+
+                return { success: true, message: 'Kendaraan ' + noPlat + ' berhasil dihapus dari sistem!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        getSopirArmadaList: async function() {
+            const sb = getClient();
+            const defaultDrivers = ['01 PENGANTARAN', '02 PENGANTARAN', 'ASWIN', 'FAHRI'];
+            if (!sb) return { success: true, data: defaultDrivers };
+            try {
+                const { data } = await sb.from('profiles').select('nama_lengkap, role, is_active');
+                const sopirSet = new Set();
+                (data || []).forEach(u => {
+                    const r = (u.role || '').toLowerCase();
+                    const active = u.is_active === true || u.is_active === 'true' || u.is_active === 'Aktif';
+                    if (active && (r.includes('sopir') || r.includes('driver')) && u.nama_lengkap) {
+                        sopirSet.add(u.nama_lengkap.trim());
+                    }
+                });
+
+                // Also check default drivers from vehicles
+                const { data: vList } = await sb.from('vehicles').select('default_driver');
+                (vList || []).forEach(v => {
+                    if (v.default_driver && v.default_driver.trim() && v.default_driver !== '-') {
+                        sopirSet.add(v.default_driver.trim());
+                    }
+                });
+
+                defaultDrivers.forEach(d => sopirSet.add(d));
+
+                const result = Array.from(sopirSet).sort((a, b) => a.localeCompare(b));
+                return { success: true, data: result };
+            } catch (err) {
+                return { success: true, data: defaultDrivers };
+            }
         },
 
         // --- PAJAK & KIR KENDARAAN ---
