@@ -1745,34 +1745,149 @@
             };
         },
 
-        addNewCustomer: async function(custPayload) {
+        addCustomer: async function(custData, currentUser) {
             const sb = getClient();
-            if (!sb) return { success: false };
-            const custId = 'CUST-' + Date.now().toString().slice(-5);
-            const payload = {
-                id: custId,
-                name: custPayload.nama_pelanggan || custPayload.name,
-                phone: custPayload.no_hp || custPayload.phone || '',
-                address: custPayload.alamat_lengkap || custPayload.address || '',
-                maps_url: custPayload.link_gmaps || custPayload.maps_url || '',
-                standard_shipping_fee: Number(custPayload.ongkir_standar || custPayload.standard_shipping_fee || 0),
-                total_orders: 0
-            };
-            const { data, error } = await sb.from('customers').insert([payload]).select().single();
-            return { success: !error, message: error ? error.message : 'Pelanggan berhasil ditambahkan!', data: data };
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                custData = custData || {};
+                const nama = (custData.nama_pelanggan || custData.name || '').trim();
+                const hp = (custData.no_hp || custData.phone || '').trim();
+                const alamat = (custData.alamat || custData.alamat_lengkap || custData.address || '').trim();
+                const gmaps = (custData.link_gmaps || custData.maps_url || '').trim();
+                const rawOngkir = custData.ongkir !== undefined ? custData.ongkir : (custData.ongkir_standar || custData.standard_shipping_fee || 0);
+                const ongkir = parseInt(String(rawOngkir).replace(/[^0-9]/g, ''), 10) || 0;
+
+                if (!nama || !hp || !alamat) {
+                    return { success: false, message: 'Nama, No. HP, dan Alamat wajib diisi!' };
+                }
+
+                // Ambil ID Pelanggan terakhir untuk auto-increment (CUST-XXXX)
+                const { data: allCusts } = await sb.from('customers').select('id');
+                let maxNum = 0;
+                (allCusts || []).forEach(c => {
+                    const m = String(c.id || '').match(/CUST-(\d+)/i);
+                    if (m) {
+                        const num = parseInt(m[1], 10);
+                        if (num > maxNum) maxNum = num;
+                    }
+                });
+
+                const newId = 'CUST-' + String(maxNum + 1).padStart(4, '0');
+
+                const payload = {
+                    id: newId,
+                    name: nama,
+                    phone: hp,
+                    address: alamat,
+                    maps_url: gmaps,
+                    standard_shipping_fee: ongkir,
+                    total_orders: 0
+                };
+
+                const { data, error } = await sb.from('customers').insert([payload]).select().single();
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'SYSTEM',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    currentUser ? currentUser.role : 'Admin',
+                    'TAMBAH_PELANGGAN',
+                    'Menambahkan pelanggan baru: ' + nama + ' (' + newId + ')'
+                );
+
+                return {
+                    success: true,
+                    message: 'Pelanggan ' + nama + ' berhasil ditambahkan!',
+                    id_pelanggan: newId,
+                    data: data
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
         },
 
-        updateCustomer: async function(idCust, custPayload) {
+        addNewCustomer: async function(custData, currentUser) {
+            return apiServices.addCustomer(custData, currentUser);
+        },
+
+        updateCustomer: async function(idCust, custPayload, currentUser) {
             const sb = getClient();
-            if (!sb) return { success: false };
-            const payload = {
-                name: custPayload.nama_pelanggan || custPayload.name,
-                phone: custPayload.no_hp || custPayload.phone,
-                address: custPayload.alamat_lengkap || custPayload.address,
-                maps_url: custPayload.link_gmaps || custPayload.maps_url
-            };
-            const { error } = await sb.from('customers').update(payload).eq('id', idCust);
-            return { success: !error, message: error ? error.message : 'Pelanggan berhasil diperbarui!' };
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                const payload = {
+                    name: custPayload.nama_pelanggan || custPayload.name,
+                    phone: custPayload.no_hp || custPayload.phone,
+                    address: custPayload.alamat || custPayload.alamat_lengkap || custPayload.address,
+                    maps_url: custPayload.link_gmaps || custPayload.maps_url
+                };
+                if (custPayload.ongkir !== undefined || custPayload.ongkir_standar !== undefined) {
+                    const rawO = custPayload.ongkir !== undefined ? custPayload.ongkir : custPayload.ongkir_standar;
+                    payload.standard_shipping_fee = parseInt(String(rawO).replace(/[^0-9]/g, ''), 10) || 0;
+                }
+
+                const { error } = await sb.from('customers').update(payload).eq('id', idCust);
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'SYSTEM',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'EDIT_PELANGGAN',
+                    'Memperbarui data pelanggan ' + idCust
+                );
+
+                return { success: true, message: 'Data pelanggan berhasil diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        getCustomerHistory: async function(idPelanggan) {
+            const sb = getClient();
+            if (!sb || !idPelanggan) return { success: true, data: [] };
+            try {
+                const cleanId = String(idPelanggan).trim();
+
+                // Cari data nama pelanggan
+                let custName = '';
+                const { data: custRow } = await sb.from('customers').select('name').eq('id', cleanId).maybeSingle();
+                if (custRow && custRow.name) custName = custRow.name.trim();
+
+                const { data: allOrders, error } = await sb.from('orders')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+
+                if (error || !allOrders) return { success: true, data: [] };
+
+                const matched = allOrders.filter(o => {
+                    if (o.customer_id && String(o.customer_id).trim() === cleanId) return true;
+                    if (custName && o.customer_name && o.customer_name.trim().toLowerCase() === custName.toLowerCase()) return true;
+                    return false;
+                });
+
+                const history = matched.map(o => ({
+                    id_order: o.id,
+                    tanggal_order: formatIndonesianDateTime(o.order_date || o.created_at),
+                    alamat_lengkap: o.address || '-',
+                    detail_barang: o.items_summary || '-',
+                    nama_sopir: o.driver_name || '-',
+                    status_verifikasi: o.verification_status || 'Belum di Cek',
+                    nama_checker: o.checker_name || '',
+                    status_pengiriman: o.shipping_status || 'Pesanan Masuk',
+                    status_pembayaran: o.payment_status || 'Belum Lunas',
+                    url_foto_nota: convertDriveUrlToDirectImage(o.invoice_photo_url || ''),
+                    url_bukti_transfer: convertDriveUrlToDirectImage(o.transfer_proof_url || ''),
+                    url_bukti_1: convertDriveUrlToDirectImage(o.proof_url_1 || ''),
+                    url_bukti_2: convertDriveUrlToDirectImage(o.proof_url_2 || ''),
+                    url_bukti_3: convertDriveUrlToDirectImage(o.proof_url_3 || ''),
+                    url_bukti_4: convertDriveUrlToDirectImage(o.proof_url_4 || ''),
+                    url_bukti_5: convertDriveUrlToDirectImage(o.proof_url_5 || '')
+                }));
+
+                return { success: true, data: history };
+            } catch (err) {
+                return { success: false, message: err.message, data: [] };
+            }
         },
 
         deleteCustomer: async function(idCust) {
@@ -3822,29 +3937,180 @@
             return { success: !error, message: error ? error.message : 'Pembayaran pajak berhasil dicatat!' };
         },
 
-        // --- MASTER DATA SUPPLIER ---
-        getSuppliers: async function() {
+        // --- MASTER DATA SUPPLIER & BARANG DATANG (TAHAP 3) ---
+        getSuppliers: async function(currentUser) {
             const sb = getClient();
-            if (!sb) return [];
-            const { data } = await sb.from('suppliers').select('*').order('name');
-            return (data || []).map(s => ({
-                id_suplayer: s.id,
-                nama_suplayer: s.name,
-                no_telp: s.phone,
-                alamat: s.address,
-                catatan: s.notes,
-                kelompok_suplayer: s.category,
-                tempo_default: s.default_due_days
-            }));
+            const defaultSuppliers = [
+                { id: 'SUP-001', nama: 'PT. Maju Jaya', kelompok: 'Semen & Besi', no_telp: '081234567801', alamat: 'Balikpapan', tempo_default: 30, catatan: 'Distributor Semen Tonasa & Besi Beton' },
+                { id: 'SUP-002', nama: 'CV. Sumber Bangunan', kelompok: 'Cat & Kimia', no_telp: '081234567802', alamat: 'Samarinda', tempo_default: 45, catatan: 'Distributor Cat Dulux, Avian & No Drop' },
+                { id: 'SUP-003', nama: 'UD. Kayu Lestari', kelompok: 'Kayu & Triplek', no_telp: '081234567803', alamat: 'Loa Kulu', tempo_default: 14, catatan: 'Kayu Meranti, Ulin & Plywood' }
+            ];
+            if (!sb) return { success: true, data: defaultSuppliers };
+            try {
+                const { data, error } = await sb.from('suppliers').select('*').order('name');
+                if (error || !data || data.length === 0) {
+                    return { success: true, data: defaultSuppliers };
+                }
+                const mapped = data.map(s => ({
+                    id: s.id,
+                    id_suplayer: s.id,
+                    nama: s.name,
+                    nama_suplayer: s.name,
+                    kelompok: s.category || '',
+                    kelompok_suplayer: s.category || '',
+                    no_telp: s.phone || '',
+                    alamat: s.address || '',
+                    tempo_default: s.default_due_days !== null && s.default_due_days !== undefined ? Number(s.default_due_days) : 30,
+                    catatan: s.notes || ''
+                }));
+                return { success: true, data: mapped };
+            } catch (err) {
+                return { success: true, data: defaultSuppliers };
+            }
         },
 
-        // --- BARANG DATANG ---
+        saveSupplier: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const nama = (payload.nama || payload.nama_suplayer || payload.name || '').trim();
+                if (!nama) return { success: false, message: 'Nama suplayer wajib diisi!' };
+
+                // Auto generate ID SUP-XXX
+                const { data: allSups } = await sb.from('suppliers').select('id');
+                let maxNum = 0;
+                (allSups || []).forEach(s => {
+                    const m = String(s.id || '').match(/SUP-(\d+)/i);
+                    if (m) {
+                        const num = parseInt(m[1], 10);
+                        if (num > maxNum) maxNum = num;
+                    }
+                });
+                const newId = 'SUP-' + String(maxNum + 1).padStart(3, '0');
+
+                const supRow = {
+                    id: newId,
+                    name: nama,
+                    category: (payload.kelompok || payload.category || '').trim() || null,
+                    phone: (payload.no_telp || payload.phone || '').trim() || null,
+                    address: (payload.alamat || payload.address || '').trim() || null,
+                    default_due_days: parseInt(payload.tempo_default, 10) || 30,
+                    notes: (payload.catatan || payload.notes || '').trim() || null,
+                    created_by: currentUser ? currentUser.nama || currentUser.nama_lengkap || 'Admin' : 'Admin'
+                };
+
+                const { data, error } = await sb.from('suppliers').insert([supRow]).select().single();
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'TAMBAH_SUPPLIER',
+                    'Menambahkan suplayer baru: ' + nama + ' (' + newId + ')'
+                );
+
+                return {
+                    success: true,
+                    message: 'Suplayer ' + nama + ' berhasil disimpan!',
+                    data: {
+                        id: newId,
+                        nama: nama,
+                        kelompok: supRow.category,
+                        no_telp: supRow.phone,
+                        alamat: supRow.address,
+                        tempo_default: supRow.default_due_days,
+                        catatan: supRow.notes
+                    }
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        updateSupplier: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const idSup = (payload.id || payload.id_suplayer || '').trim();
+                if (!idSup) return { success: false, message: 'ID Suplayer tidak valid!' };
+
+                const updateObj = {};
+                if (payload.nama || payload.nama_suplayer || payload.name) {
+                    updateObj.name = (payload.nama || payload.nama_suplayer || payload.name).trim();
+                }
+                if (payload.kelompok !== undefined || payload.category !== undefined) {
+                    updateObj.category = (payload.kelompok !== undefined ? payload.kelompok : payload.category).trim() || null;
+                }
+                if (payload.no_telp !== undefined || payload.phone !== undefined) {
+                    updateObj.phone = (payload.no_telp !== undefined ? payload.no_telp : payload.phone).trim() || null;
+                }
+                if (payload.alamat !== undefined || payload.address !== undefined) {
+                    updateObj.address = (payload.alamat !== undefined ? payload.alamat : payload.address).trim() || null;
+                }
+                if (payload.tempo_default !== undefined) {
+                    updateObj.default_due_days = parseInt(payload.tempo_default, 10) || 30;
+                }
+                if (payload.catatan !== undefined || payload.notes !== undefined) {
+                    updateObj.notes = (payload.catatan !== undefined ? payload.catatan : payload.notes).trim() || null;
+                }
+
+                const { error } = await sb.from('suppliers').update(updateObj).eq('id', idSup);
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'EDIT_SUPPLIER',
+                    'Memperbarui data suplayer ' + idSup
+                );
+
+                return { success: true, message: 'Data suplayer ' + (updateObj.name || idSup) + ' berhasil diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteSupplier: async function(idSup, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                idSup = String(idSup || '').trim();
+                if (!idSup) return { success: false, message: 'ID Suplayer tidak valid!' };
+
+                const { error } = await sb.from('suppliers').delete().eq('id', idSup);
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'DELETE_SUPPLIER',
+                    'Menghapus suplayer ' + idSup
+                );
+
+                return { success: true, message: 'Suplayer berhasil dihapus!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        // --- BARANG DATANG (INCOMING GOODS) ---
         getBarangDatangList: async function(currentUser) {
             const sb = getClient();
             if (!sb) return { success: true, data: [] };
             try {
                 const { data, error } = await sb.from('incoming_goods').select('*').order('created_at', { ascending: false });
                 if (error || !data) return { success: true, data: [] };
+
+                const now = new Date();
+                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                const todayZero = new Date(wita.getFullYear(), wita.getMonth(), wita.getDate(), 0, 0, 0);
+
                 const mapped = data.map(b => {
                     const isPendingAdmin = (
                         b.payment_method === 'Di isi admin nanti' || 
@@ -3852,31 +4118,410 @@
                         b.due_status === 'Diisi Admin Nanti' || 
                         b.due_status === 'Menunggu Admin'
                     );
+
+                    let calculatedStatus = b.due_status || 'Normal';
+                    let daysRemaining = null;
+                    let calculatedTglJatuhTempo = b.due_date ? formatIndonesianDateOnly(b.due_date) : '-';
+
+                    const isLunas = (
+                        b.payment_method === 'Pembayaran cash' ||
+                        b.payment_method === 'Pembayaran transfer' ||
+                        b.payment_method === 'Cash / Transfer' ||
+                        (b.remaining_debt !== null && Number(b.remaining_debt) <= 0) ||
+                        (b.due_status && b.due_status.toLowerCase() === 'lunas')
+                    );
+
+                    if (isPendingAdmin) {
+                        calculatedStatus = 'Menunggu Admin';
+                        calculatedTglJatuhTempo = '-';
+                    } else if (isLunas) {
+                        calculatedStatus = 'Lunas';
+                        calculatedTglJatuhTempo = '-';
+                    } else if (b.due_date) {
+                        const dTarget = new Date(b.due_date);
+                        if (!isNaN(dTarget.getTime())) {
+                            const targetZero = new Date(dTarget.getFullYear(), dTarget.getMonth(), dTarget.getDate(), 0, 0, 0);
+                            const diffMillis = targetZero.getTime() - todayZero.getTime();
+                            const diffDays = Math.round(diffMillis / (1000 * 60 * 60 * 24));
+                            daysRemaining = diffDays;
+
+                            if (diffDays < 0) {
+                                calculatedStatus = 'Sudah Jatuh Tempo (Lewat ' + Math.abs(diffDays) + ' Hari)';
+                            } else if (diffDays === 0) {
+                                calculatedStatus = 'Akan Jatuh Tempo (Hari Ini)';
+                            } else if (diffDays <= 3) {
+                                calculatedStatus = 'Akan Jatuh Tempo (H-' + diffDays + ')';
+                            } else {
+                                calculatedStatus = 'Belum Jatuh Tempo (' + diffDays + ' Hari Lagi)';
+                            }
+                        }
+                    }
+
                     return {
                         id: b.id,
                         id_barang_datang: b.id,
-                        no_nota: b.invoice_no,
-                        nama_suplayer: b.supplier_name,
+                        no_nota: b.invoice_no || '-',
+                        nama_suplayer: b.supplier_name || '-',
                         tanggal_nota: formatIndonesianDateOnly(b.invoice_date),
-                        tanggal_terima: formatIndonesianDateTime(b.received_date),
+                        tanggal_terima: formatIndonesianDateTime(b.received_date || b.created_at),
+                        tanggal_jatuh_tempo: calculatedTglJatuhTempo,
                         catatan_barang: b.items_summary || '-',
                         catatan_cacat: b.damage_notes || '-',
-                        total_nilai_uang: b.total_amount || 0,
+                        total_nilai_uang: Number(b.total_amount || 0),
                         metode_pembayaran: b.payment_method || 'Invoice',
-                        payment_status: isPendingAdmin ? 'DIISI_ADMIN_NANTI' : (b.due_status || 'Belum Lunas'),
-                        status_jatuh_tempo: isPendingAdmin ? 'Menunggu Admin' : (b.due_status || 'Belum Jatuh Tempo'),
-                        nominal_cash: b.cash_paid || 0,
-                        sudah_dibayar: b.paid_amount || 0,
-                        sisa_hutang: b.remaining_debt !== null ? b.remaining_debt : Math.max(0, (b.total_amount || 0) - (b.cash_paid || 0)),
-                        foto_bukti_nota: b.payment_proof_url || '',
-                        riwayat_pembayaran: typeof b.payment_history === 'string' ? b.payment_history : JSON.stringify(b.payment_history || [])
+                        payment_status: isPendingAdmin ? 'DIISI_ADMIN_NANTI' : 'COMPLETED',
+                        status_jatuh_tempo: calculatedStatus,
+                        days_remaining: daysRemaining,
+                        nominal_cash: Number(b.cash_paid || 0),
+                        sudah_dibayar: Number(b.paid_amount || 0),
+                        sisa_hutang: Number(b.remaining_debt !== null ? b.remaining_debt : Math.max(0, (b.total_amount || 0) - (b.cash_paid || 0))),
+                        tempo_hari: b.due_days !== null && b.due_days !== undefined ? b.due_days : 30,
+                        dibuat_oleh: b.created_by ? (b.created_by + (b.role_creator ? ' (' + b.role_creator + ')' : '')) : '-',
+                        foto_barang_1: convertDriveUrlToDirectImage(b.photo_1 || ''),
+                        foto_barang_2: convertDriveUrlToDirectImage(b.photo_2 || ''),
+                        foto_barang_3: convertDriveUrlToDirectImage(b.photo_3 || ''),
+                        foto_barang_4: convertDriveUrlToDirectImage(b.photo_4 || ''),
+                        foto_barang_5: convertDriveUrlToDirectImage(b.photo_5 || ''),
+                        foto_bukti_nota: convertDriveUrlToDirectImage(b.payment_proof_url || ''),
+                        foto_bukti_pembayaran: convertDriveUrlToDirectImage(b.payment_proof_url || ''),
+                        riwayat_pembayaran: Array.isArray(b.payment_history) ? JSON.stringify(b.payment_history) : (b.payment_history || '[]')
                     };
                 });
+
                 return { success: true, data: mapped };
             } catch (err) {
                 console.error('[getBarangDatangList error]', err);
                 return { success: true, data: [] };
             }
+        },
+
+        saveBarangDatang: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const now = new Date();
+                const nowUtc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                const yy = String(wita.getFullYear()).slice(-2);
+                const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                const dd = String(wita.getDate()).padStart(2, '0');
+                const rnd = Math.floor(100 + Math.random() * 900);
+
+                const finalId = 'BD-' + Date.now();
+                const autoNoNota = 'BRG-' + dd + mm + yy + '-' + rnd;
+                const finalNoNota = (payload.no_nota && payload.no_nota.trim() !== '') ? payload.no_nota.trim() : autoNoNota;
+
+                // Upload up to 5 photos to Google Drive Edge CDN (lh3)
+                let p1 = '';
+                let p2 = '';
+                let p3 = '';
+                let p4 = '';
+                let p5 = '';
+                let pBukti = '';
+
+                if (payload.foto_barang_1 && payload.foto_barang_1.length > 50) {
+                    p1 = await uploadToGoogleDriveCdn(payload.foto_barang_1, 'BD_F1_' + finalNoNota);
+                }
+                if (payload.foto_barang_2 && payload.foto_barang_2.length > 50) {
+                    p2 = await uploadToGoogleDriveCdn(payload.foto_barang_2, 'BD_F2_' + finalNoNota);
+                }
+                if (payload.foto_barang_3 && payload.foto_barang_3.length > 50) {
+                    p3 = await uploadToGoogleDriveCdn(payload.foto_barang_3, 'BD_F3_' + finalNoNota);
+                }
+                if (payload.foto_barang_4 && payload.foto_barang_4.length > 50) {
+                    p4 = await uploadToGoogleDriveCdn(payload.foto_barang_4, 'BD_F4_' + finalNoNota);
+                }
+                if (payload.foto_barang_5 && payload.foto_barang_5.length > 50) {
+                    p5 = await uploadToGoogleDriveCdn(payload.foto_barang_5, 'BD_F5_' + finalNoNota);
+                }
+                if (payload.foto_bukti_pembayaran && payload.foto_bukti_pembayaran.length > 50) {
+                    pBukti = await uploadToGoogleDriveCdn(payload.foto_bukti_pembayaran, 'BD_BUKTI_' + finalNoNota);
+                }
+
+                let cleanTotalUang = parseInt(String(payload.total_nilai_uang || '0').replace(/[^0-9]/g, ''), 10) || 0;
+                let cleanNominalCash = parseInt(String(payload.nominal_cash || '0').replace(/[^0-9]/g, ''), 10) || 0;
+                let sudahDibayar = 0;
+                let sisaHutang = cleanTotalUang;
+                let initialHistory = [];
+                let finalDueDate = null;
+                let dueStatus = 'Normal';
+
+                const met = (payload.metode_pembayaran || '').trim();
+                const isDiisiAdmin = (met === 'Di isi admin nanti' || met === 'DIISI ADMIN NANTI' || met.toLowerCase().includes('admin') || payload.payment_status === 'DIISI_ADMIN_NANTI');
+
+                if (isDiisiAdmin) {
+                    cleanTotalUang = 0;
+                    cleanNominalCash = 0;
+                    sudahDibayar = 0;
+                    sisaHutang = 0;
+                    finalDueDate = null;
+                    dueStatus = 'Menunggu Admin';
+                } else if (met === 'Pembayaran cash' || met === 'Pembayaran transfer' || met === 'Cash / Transfer') {
+                    cleanNominalCash = cleanTotalUang;
+                    sudahDibayar = cleanTotalUang;
+                    sisaHutang = 0;
+                    dueStatus = 'Lunas';
+                    initialHistory.push({
+                        tanggal: formatIndonesianDateTime(new Date()),
+                        tipe: 'Lunas Awal (' + met + ')',
+                        nominal: cleanTotalUang,
+                        sisa_setelahnya: 0,
+                        bukti_url: pBukti,
+                        dicatat_oleh: currentUser ? currentUser.nama || currentUser.nama_lengkap || 'Staff' : 'Staff'
+                    });
+                } else {
+                    // Invoice
+                    const tempoDays = parseInt(payload.tempo_hari, 10) || 30;
+                    let dNota = now;
+                    if (payload.tanggal_nota) {
+                        const parsed = new Date(payload.tanggal_nota);
+                        if (!isNaN(parsed.getTime())) dNota = parsed;
+                    }
+                    const dTarget = new Date(dNota.getFullYear(), dNota.getMonth(), dNota.getDate() + tempoDays);
+                    finalDueDate = dTarget.toISOString().split('T')[0];
+                    sudahDibayar = cleanNominalCash;
+                    sisaHutang = Math.max(0, cleanTotalUang - cleanNominalCash);
+                    dueStatus = sisaHutang === 0 ? 'Lunas' : 'Belum Jatuh Tempo';
+
+                    if (cleanNominalCash > 0) {
+                        initialHistory.push({
+                            tanggal: formatIndonesianDateTime(new Date()),
+                            tipe: 'DP / Titip Awal',
+                            nominal: cleanNominalCash,
+                            sisa_setelahnya: sisaHutang,
+                            bukti_url: pBukti,
+                            dicatat_oleh: currentUser ? currentUser.nama || currentUser.nama_lengkap || 'Staff' : 'Staff'
+                        });
+                    }
+                }
+
+                const bdRow = {
+                    id: finalId,
+                    invoice_no: finalNoNota,
+                    supplier_id: payload.id_suplayer || null,
+                    supplier_name: (payload.nama_suplayer || 'Suplayer').trim(),
+                    invoice_date: payload.tanggal_nota || new Date().toISOString().split('T')[0],
+                    received_date: payload.tanggal_terima || new Date().toISOString(),
+                    items_summary: payload.catatan_barang || null,
+                    damage_notes: payload.catatan_cacat || null,
+                    total_amount: cleanTotalUang,
+                    payment_method: met,
+                    cash_paid: cleanNominalCash,
+                    paid_amount: sudahDibayar,
+                    remaining_debt: sisaHutang,
+                    due_days: parseInt(payload.tempo_hari, 10) || 30,
+                    due_date: finalDueDate,
+                    due_status: dueStatus,
+                    payment_proof_url: pBukti,
+                    payment_history: initialHistory,
+                    created_by: currentUser ? currentUser.nama || currentUser.nama_lengkap || 'Staff' : 'Staff',
+                    role_creator: currentUser ? currentUser.role || 'Staff Toko' : 'Staff Toko',
+                    photo_1: p1,
+                    photo_2: p2,
+                    photo_3: p3,
+                    photo_4: p4,
+                    photo_5: p5
+                };
+
+                const { error } = await sb.from('incoming_goods').insert([bdRow]);
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'STAFF',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Staff',
+                    currentUser ? currentUser.role : 'Staff Toko',
+                    'INPUT_BARANG_DATANG',
+                    'Mencatat barang datang: ' + finalNoNota + ' dari ' + bdRow.supplier_name
+                );
+
+                return { success: true, message: 'Data barang datang berhasil disimpan!', id: finalId };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        updateBarangDatang: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const idBd = (payload.id || payload.id_barang_datang || '').trim();
+                if (!idBd) return { success: false, message: 'ID Barang Datang tidak valid!' };
+
+                const { data: existing, error: getErr } = await sb.from('incoming_goods').select('*').eq('id', idBd).maybeSingle();
+                if (getErr || !existing) return { success: false, message: 'Nota barang datang ' + idBd + ' tidak ditemukan!' };
+
+                const updateObj = {};
+                if (payload.no_nota) updateObj.invoice_no = payload.no_nota.trim();
+                if (payload.nama_suplayer) updateObj.supplier_name = payload.nama_suplayer.trim();
+                if (payload.tanggal_nota) updateObj.invoice_date = payload.tanggal_nota;
+                if (payload.tanggal_terima) updateObj.received_date = payload.tanggal_terima;
+                if (payload.catatan_barang !== undefined) updateObj.items_summary = payload.catatan_barang;
+                if (payload.catatan_cacat !== undefined) updateObj.damage_notes = payload.catatan_cacat;
+                if (payload.metode_pembayaran) updateObj.payment_method = payload.metode_pembayaran;
+
+                if (payload.total_nilai_uang !== undefined) {
+                    const tot = parseInt(String(payload.total_nilai_uang).replace(/[^0-9]/g, ''), 10) || 0;
+                    updateObj.total_amount = tot;
+                    const paid = Number(existing.paid_amount || 0);
+                    updateObj.remaining_debt = Math.max(0, tot - paid);
+                    if (updateObj.remaining_debt === 0) updateObj.due_status = 'Lunas';
+                }
+
+                if (payload.tempo_hari !== undefined) {
+                    const tempo = parseInt(payload.tempo_hari, 10) || 30;
+                    updateObj.due_days = tempo;
+                    const dNota = new Date(updateObj.invoice_date || existing.invoice_date || new Date());
+                    const dTarget = new Date(dNota.getFullYear(), dNota.getMonth(), dNota.getDate() + tempo);
+                    updateObj.due_date = dTarget.toISOString().split('T')[0];
+                }
+
+                // Handle replacement photos if new base64 provided
+                if (payload.foto_barang_1 && payload.foto_barang_1.length > 50 && payload.foto_barang_1.startsWith('data:')) {
+                    updateObj.photo_1 = await uploadToGoogleDriveCdn(payload.foto_barang_1, 'BD_F1_' + idBd);
+                }
+                if (payload.foto_barang_2 && payload.foto_barang_2.length > 50 && payload.foto_barang_2.startsWith('data:')) {
+                    updateObj.photo_2 = await uploadToGoogleDriveCdn(payload.foto_barang_2, 'BD_F2_' + idBd);
+                }
+                if (payload.foto_barang_3 && payload.foto_barang_3.length > 50 && payload.foto_barang_3.startsWith('data:')) {
+                    updateObj.photo_3 = await uploadToGoogleDriveCdn(payload.foto_barang_3, 'BD_F3_' + idBd);
+                }
+                if (payload.foto_barang_4 && payload.foto_barang_4.length > 50 && payload.foto_barang_4.startsWith('data:')) {
+                    updateObj.photo_4 = await uploadToGoogleDriveCdn(payload.foto_barang_4, 'BD_F4_' + idBd);
+                }
+                if (payload.foto_barang_5 && payload.foto_barang_5.length > 50 && payload.foto_barang_5.startsWith('data:')) {
+                    updateObj.photo_5 = await uploadToGoogleDriveCdn(payload.foto_barang_5, 'BD_F5_' + idBd);
+                }
+                if (payload.foto_bukti_pembayaran && payload.foto_bukti_pembayaran.length > 50 && payload.foto_bukti_pembayaran.startsWith('data:')) {
+                    updateObj.payment_proof_url = await uploadToGoogleDriveCdn(payload.foto_bukti_pembayaran, 'BD_BUKTI_' + idBd);
+                }
+
+                const { error: updErr } = await sb.from('incoming_goods').update(updateObj).eq('id', idBd);
+                if (updErr) return { success: false, message: updErr.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'EDIT_BARANG_DATANG',
+                    'Memperbarui nota barang datang ' + idBd
+                );
+
+                return { success: true, message: 'Data nota barang datang berhasil diperbarui!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        deleteBarangDatang: async function(idBd, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                idBd = String(idBd || '').trim();
+                if (!idBd) return { success: false, message: 'ID Barang Datang tidak valid!' };
+
+                const { error } = await sb.from('incoming_goods').delete().eq('id', idBd);
+                if (error) return { success: false, message: error.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    'Admin',
+                    'DELETE_BARANG_DATANG',
+                    'Menghapus nota barang datang ' + idBd
+                );
+
+                return { success: true, message: 'Data barang datang berhasil dihapus!' };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        recordSupplierPayment: async function(payload, currentUser) {
+            const sb = getClient();
+            if (!sb) return { success: false, message: 'Database disconnected' };
+            try {
+                payload = payload || {};
+                const idBd = (payload.id_barang_datang || payload.id || '').trim();
+                if (!idBd) return { success: false, message: 'ID Nota Suplayer tidak valid!' };
+
+                const bayarNominal = parseInt(String(payload.nominal_bayar || '0').replace(/[^0-9]/g, ''), 10) || 0;
+                if (bayarNominal <= 0) return { success: false, message: 'Nominal pembayaran harus lebih dari 0!' };
+
+                const { data: cur, error: getErr } = await sb.from('incoming_goods').select('*').eq('id', idBd).maybeSingle();
+                if (getErr || !cur) return { success: false, message: 'Nota suplayer tidak ditemukan di database!' };
+
+                // Upload bukti transfer ke Google Drive Edge CDN (lh3) jika ada
+                let cdnBukti = '';
+                if (payload.foto_bukti_transfer && payload.foto_bukti_transfer.length > 50) {
+                    cdnBukti = await uploadToGoogleDriveCdn(payload.foto_bukti_transfer, 'PAY_SUP_' + idBd);
+                } else if (payload.bukti_url) {
+                    cdnBukti = convertDriveUrlToDirectImage(payload.bukti_url);
+                }
+
+                const oldPaid = Number(cur.paid_amount || 0);
+                const oldDebt = cur.remaining_debt !== null ? Number(cur.remaining_debt) : Number(cur.total_amount || 0);
+                const newPaid = oldPaid + bayarNominal;
+                const newDebt = Math.max(0, oldDebt - bayarNominal);
+                const isLunas = newDebt <= 0 || payload.opsi_bayar === 'Lunas';
+
+                let hist = [];
+                try {
+                    if (Array.isArray(cur.payment_history)) {
+                        hist = cur.payment_history;
+                    } else if (typeof cur.payment_history === 'string' && cur.payment_history.trim()) {
+                        hist = JSON.parse(cur.payment_history);
+                    }
+                } catch(e) {
+                    hist = [];
+                }
+
+                const paymentRecord = {
+                    tanggal: formatIndonesianDateTime(new Date()),
+                    tipe: isLunas ? ('Pelunasan (' + (payload.metode_bayar || 'Transfer') + ')') : ('Titip Sebagian (' + (payload.metode_bayar || 'Transfer') + ')'),
+                    nominal: bayarNominal,
+                    sisa_setelahnya: newDebt,
+                    catatan: payload.catatan || '-',
+                    bukti_url: cdnBukti,
+                    dicatat_oleh: currentUser ? (currentUser.nama || currentUser.nama_lengkap || 'Admin') + ' (' + (currentUser.role || 'Admin') + ')' : 'Admin',
+                    jenis_pembayaran: payload.metode_bayar || 'Transfer'
+                };
+                hist.push(paymentRecord);
+
+                const updateObj = {
+                    paid_amount: newPaid,
+                    remaining_debt: newDebt,
+                    due_status: isLunas ? 'Lunas' : cur.due_status,
+                    payment_history: hist
+                };
+
+                if (cdnBukti) {
+                    updateObj.payment_proof_url = cdnBukti;
+                }
+
+                const { error: updErr } = await sb.from('incoming_goods').update(updateObj).eq('id', idBd);
+                if (updErr) return { success: false, message: updErr.message };
+
+                await logActivity(
+                    currentUser ? currentUser.id_user || currentUser.user_id : 'ADMIN',
+                    currentUser ? currentUser.nama || currentUser.nama_lengkap : 'Admin',
+                    currentUser ? currentUser.role : 'Admin',
+                    'BAYAR_SUPLAYER',
+                    'Mencatat pembayaran suplayer ' + (cur.supplier_name || idBd) + ' sebesar Rp ' + bayarNominal.toLocaleString('id-ID') + (isLunas ? ' (LUNAS)' : ' (Sisa: Rp ' + newDebt.toLocaleString('id-ID') + ')')
+                );
+
+                return {
+                    success: true,
+                    message: 'Pembayaran nota suplayer sebesar Rp ' + bayarNominal.toLocaleString('id-ID') + ' berhasil dicatat!' + (isLunas ? ' (Status: LUNAS)' : '')
+                };
+            } catch (err) {
+                return { success: false, message: err.message };
+            }
+        },
+
+        submitPelunasanSupplier: async function(payload, currentUser) {
+            return apiServices.recordSupplierPayment(payload, currentUser);
         },
 
         // --- HELPER / KARNET APPROVALS (SISTEM PERSETUJUAN PERGANTIAN KARNET) ---
