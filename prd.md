@@ -207,6 +207,12 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Audit Laporan BBM:** Sanitasi nilai default `'semua'` pada backend adapter `getVehicleReports` dan penyempurnaan plat matching `isPlatMatch`, memulihkan tampilan metrik pengisian BBM, liter, biaya, grafik konsumsi, dan ranking SPBU.
   - **Layout Portal Armada Card:** Penataan flexbox (`min-w-0 flex-1` & `flex-wrap gap-2`) memastikan tombol "Buka Laporan" berada 100% di dalam batas kartu pada seluruh ukuran layar.
   - **Verifikasi Produksi:** Commit `1b4ae94`, deployment Vercel `tmr-rl0u6f6r2-zettbos-projects.vercel.app`, ter-alias resmi ke `https://tmr-app.vercel.app`.
+- **v6.5.0 (7 November 2026 - Sanitasi Timestamp TIMESTAMPTZ PostgreSQL & Pemulihan SOP Template Terjadwal):**
+  - **Sanitasi Kolom created_at pada Backend Adapter (`saveSop`):** Memperbaiki penolakan fatal tipe data PostgreSQL `TIMESTAMPTZ` (error kode `22007`) akibat format string bahasa Indonesia (`"07 November 2026 • 08.03 WITA"`). Ditambahkan validasi dan pemaksaan konversi ke standar ISO timestamp (`new Date().toISOString()`), serta penanganan error eksplisit pada `sb.from('sop_masters').upsert()` untuk mengeliminasi silent failure.
+  - **Pemisahan Properti Tanggal di Form SOP (`submitSopForm`):** Memisahkan tanggal tampilan humanis (`created_at_display`) dengan properti ISO kanonikal (`created_at = new Date().toISOString()`) pada `index.html`.
+  - **Pemulihan Data SOP Klien Amir:** Memulihkan record master SOP `SOP-1794009563853` (*"Pengantaran Muatan Berat & Semen"*, status *"Terjadwal"*) di database Supabase `sop_masters`, menyambungkan kembali 3 langkah kerja di `sop_steps` dan jadwal harian di `sop_targets`.
+  - **Standarisasi Konversi Waktu WITA di Adapter (`getSopList` & `getSopDashboard`):** Mengonversi ISO timestamp dari PostgreSQL ke zona waktu WITA (UTC+8) secara akurat (`DD-MM-YYYY HH:mm WITA`).
+  - **Cache Buster & Live Deployment:** Bumping cache buster script `supabase-gas-adapter.js?v=6.5.0` dan verifikasi live di `https://tmr-app.vercel.app`. Klien Amir dan seluruh user toko dapat langsung melihat SOP di folder "Terjadwal" cukup dengan merefresh halaman (F5).
 
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT

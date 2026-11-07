@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.4.0"></script>
+    <script src="./supabase-gas-adapter.js?v=6.5.0"></script>
 
 </head>
 
@@ -53865,7 +53865,8 @@
 
         const nowTgl = (s.jadwal && s.jadwal.tanggal) || getCurrentFormattedDateSop();
         const nowJam = (s.jadwal && s.jadwal.jam_list && s.jadwal.jam_list.length > 0) ? s.jadwal.jam_list[0] : (new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') + ' WITA');
-        s.created_at = nowTgl + ' • ' + nowJam;
+        s.created_at_display = nowTgl + ' • ' + nowJam;
+        s.created_at = new Date().toISOString();
 
         console.log("SOP Disimpan:", s);
         console.log('[SOP Diagnostic] 1. SOP DISIMPAN:', {

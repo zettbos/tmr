@@ -5048,10 +5048,21 @@
                     let createdAtStr = m.created_at || '2026-10-25T22:29:00';
                     let cDateStr = '25-10-2026 22:29 WITA';
                     if (createdAtStr) {
-                        const mMatch = String(createdAtStr).match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
-                        if (mMatch) {
-                            cDateStr = `${mMatch[3]}-${mMatch[2]}-${mMatch[1]} ${mMatch[4]}:${mMatch[5]} WITA`;
-                        } else if (String(createdAtStr).includes('WITA')) {
+                        try {
+                            const d = new Date(createdAtStr);
+                            if (!isNaN(d.getTime())) {
+                                const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+                                const wita = new Date(utc + (3600000 * 8));
+                                const dd = String(wita.getDate()).padStart(2, '0');
+                                const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                                const yyyy = wita.getFullYear();
+                                const hh = String(wita.getHours()).padStart(2, '0');
+                                const min = String(wita.getMinutes()).padStart(2, '0');
+                                cDateStr = `${dd}-${mm}-${yyyy} ${hh}:${min} WITA`;
+                            } else if (String(createdAtStr).includes('WITA')) {
+                                cDateStr = String(createdAtStr);
+                            }
+                        } catch(e) {
                             cDateStr = String(createdAtStr);
                         }
                     }
@@ -5169,10 +5180,21 @@
                     let createdAtStr = m.created_at || '2026-10-25T22:29:00';
                     let cDateStr = '25-10-2026 22:29 WITA';
                     if (createdAtStr) {
-                        const mMatch = String(createdAtStr).match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
-                        if (mMatch) {
-                            cDateStr = `${mMatch[3]}-${mMatch[2]}-${mMatch[1]} ${mMatch[4]}:${mMatch[5]} WITA`;
-                        } else if (String(createdAtStr).includes('WITA')) {
+                        try {
+                            const d = new Date(createdAtStr);
+                            if (!isNaN(d.getTime())) {
+                                const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+                                const wita = new Date(utc + (3600000 * 8));
+                                const dd = String(wita.getDate()).padStart(2, '0');
+                                const mm = String(wita.getMonth() + 1).padStart(2, '0');
+                                const yyyy = wita.getFullYear();
+                                const hh = String(wita.getHours()).padStart(2, '0');
+                                const min = String(wita.getMinutes()).padStart(2, '0');
+                                cDateStr = `${dd}-${mm}-${yyyy} ${hh}:${min} WITA`;
+                            } else if (String(createdAtStr).includes('WITA')) {
+                                cDateStr = String(createdAtStr);
+                            }
+                        } catch(e) {
                             cDateStr = String(createdAtStr);
                         }
                     }
@@ -5291,6 +5313,14 @@
                 const kriteria = sPayload.kriteria_penyelesaian || { semua_selesai: true, konfirmasi_baca: true };
 
                 // 1. Simpan ke sop_masters
+                let validCreatedAt = new Date().toISOString();
+                if (sPayload.created_at) {
+                    const parsed = new Date(sPayload.created_at);
+                    if (!isNaN(parsed.getTime())) {
+                        validCreatedAt = parsed.toISOString();
+                    }
+                }
+
                 const { error: masterErr } = await sb.from('sop_masters').upsert({
                     id: sopId,
                     title: judul,
@@ -5299,9 +5329,12 @@
                     status: status,
                     completion_criteria: kriteria,
                     created_by: creator,
-                    created_at: sPayload.created_at || new Date().toISOString()
+                    created_at: validCreatedAt
                 });
-                if (masterErr) console.warn('[Adapter saveSop masterErr]', masterErr);
+                if (masterErr) {
+                    console.error('[Adapter saveSop masterErr]', masterErr);
+                    return { success: false, message: 'Gagal menyimpan master SOP: ' + (masterErr.message || JSON.stringify(masterErr)) };
+                }
 
                 // 2. Simpan langkah ke sop_steps
                 const langkahList = Array.isArray(sPayload.langkah_list) ? sPayload.langkah_list :
