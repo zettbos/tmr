@@ -7170,17 +7170,36 @@
                     const targetUsers = Array.isArray(tgt.target_users) ? tgt.target_users : [];
                     const isAllUsers = targetUsers.length === 0 || targetUsers.includes('ALL') || targetUsers.includes('Semua User');
 
+                    // REVISI V7.0.0: Kalkulasi real-time multi_user_progress dari logs hari ini
+                    const distinctAssigned = [...new Set((targetUsers || []).filter(u => u && typeof u === 'string' && u.toUpperCase().startsWith('USR-')))];
+                    const totalAssigned = distinctAssigned.length > 0 ? distinctAssigned.length : (targetUsers.length > 0 && !isAllUsers ? targetUsers.length : 1);
+
+                    const completedLogsForSop = (logsRes.data || []).filter(l => l.sop_id === m.id && (String(l.status || '').toLowerCase().trim() === 'selesai' || String(l.status || '').toLowerCase().trim() === 'sudah selesai'));
+                    const completedByList = completedLogsForSop.map(l => l.full_name || l.username || 'User').filter(Boolean);
+                    const completedCount = completedLogsForSop.length;
+                    const percentage = totalAssigned > 0 ? Math.min(100, Math.round((completedCount / totalAssigned) * 100)) : 0;
+                    const isAllCompleted = totalAssigned > 0 && completedCount >= totalAssigned;
+                    const effectiveServerStatus = isAllCompleted ? 'Selesai' : (completedCount > 0 ? 'Belum Selesai' : (m.status || 'Terjadwal'));
+
                     return {
                         id_sop: m.id,
                         judul_sop: m.title,
                         kategori: m.category,
                         tingkat_kepentingan: m.priority || 'Wajib',
-                        status: m.status || 'Aktif',
+                        status: effectiveServerStatus,
                         kriteria_penyelesaian: m.completion_criteria || {},
                         langkah_langkah: stepsMap[m.id] || [],
                         target_type: isAllUsers ? 'ALL' : 'SPECIFIC',
                         target_users: isAllUsers ? ['ALL'] : targetUsers,
                         recipients: isAllUsers ? 'ALL' : targetUsers,
+                        multi_user_progress: {
+                            total_assigned: totalAssigned,
+                            completed_count: completedCount,
+                            percentage: percentage,
+                            is_all_completed: isAllCompleted,
+                            completed_by: completedByList,
+                            date_key: todayStr
+                        },
                         jadwal: {
                             tanggal: tgt.start_date || todayStr,
                             jam_list: cleanJamList.length > 0 ? cleanJamList : ['08.00'],

@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.9.0"></script>
+    <script src="./supabase-gas-adapter.js?v=7.0.0"></script>
 
 </head>
 
@@ -51219,6 +51219,8 @@
         document.body.style.overflow = '';
         document.documentElement.style.overflow = '';
         stopSopClockTicker();
+        window._activeSopNotificationData = null;
+        window._activeSopAckKey = null;
     }
     window.closeModulSOP = closeModulSOP;
 
@@ -51712,9 +51714,8 @@
             if (m.is_all_completed !== undefined || m.isAllCompleted !== undefined) {
                 backendIsAllCompleted = Boolean(m.is_all_completed || m.isAllCompleted);
             }
-            if (m.is_user_completed !== undefined || m.isUserCompleted !== undefined) {
-                backendIsUserCompleted = Boolean(m.is_user_completed || m.isUserCompleted);
-            }
+            // REVISI V7.0.0: Dilarang keras mengadopsi boolean is_user_completed global dari cache,
+            // status selesai user aktif WAJIB diverifikasi terhadap identitas spesifik user di completed_by!
         }
 
         if (backendTotal > 0) {
@@ -51788,7 +51789,17 @@
 
         completedCount = Math.min(targetCount, completedCount);
         const isAllCompleted = Boolean(backendIsAllCompleted || (completedCount >= targetCount && targetCount > 0));
-        const isUserCompleted = Boolean(backendIsUserCompleted || isUserDoneLocally || completedUserLogs.some(l => isTargetUserMatchLog_({ id: curUId, nama: curUName }, l)));
+
+        // REVISI V7.0.0: Isolasi total multi-user completion status per sesi aktif
+        const isUserInCompletedBy = Boolean(
+            (curUName && completedByList.some(nm => {
+                const normNm = String(nm || '').replace(/[@_\-\s]+/g, '').toLowerCase();
+                const normCur = curUName.replace(/[@_\-\s]+/g, '').toLowerCase();
+                return normNm && normCur && (normNm === normCur || normNm.includes(normCur) || normCur.includes(normNm));
+            })) ||
+            (curUId && completedUserLogs.some(l => l.id && l.id === curUId))
+        );
+        const isUserCompleted = Boolean(isUserDoneLocally || isUserInCompletedBy || completedUserLogs.some(l => isTargetUserMatchLog_({ id: curUId, nama: curUName }, l)));
         const percentage = Math.min(100, Math.round((completedCount / targetCount) * 100));
 
         return {
@@ -51888,20 +51899,6 @@
         // 1. DRAFT SELALU DRAFT
         if (stLower === 'draft' || stLower === 'draf') return 'Draft';
 
-        // 2. OTORITAS STATUS SELESAI (SPREADSHEET & ADMIN MANUAL OVERRIDE):
-        // Jika data master Spreadsheet atau Admin secara manual menyatakan 'Selesai',
-        // maka status MUTLAK 'Selesai'. Tidak boleh ditimpa menjadi 'Belum Selesai' oleh kalkulasi progres multi-user!
-        if (stLower === 'selesai' || (sop._adminManualStatus && String(sop._adminManualStatus).toLowerCase() === 'selesai')) {
-            return 'Selesai';
-        }
-
-        // 3. JIKA ADMIN SECARA MANUAL MENGUBAH KE STATUS LAIN
-        if (sop._adminManualStatus) {
-            const manualSt = String(sop._adminManualStatus).trim().toLowerCase();
-            if (manualSt === 'terjadwal' || manualSt === 'terbit') return 'Terjadwal';
-            if (manualSt === 'belum selesai' || manualSt === 'aktif' || manualSt === 'proses' || manualSt === 'dalam proses') return 'Belum Selesai';
-        }
-
         if (!todayKey) todayKey = (typeof getTodayWitaDateKey === 'function') ? getTodayWitaDateKey() : 'today';
         if (!user) user = (typeof getCurrentAppUser === 'function') ? getCurrentAppUser() : (window.currentUser || null);
 
@@ -51911,31 +51908,40 @@
                 ? window.getSopMultiUserProgress(sop, user, todayKey)
                 : (sop.multi_user_progress || { totalAssigned: 1, completedCount: 0, percentage: 0, isAllCompleted: false, isUserCompleted: false }));
 
-        // 4. EVALUASI JIKA SUDAH SELESAI SECARA OTOMATIS:
-        // Multi-user: HANYA jika 100% user selesai (isAllCompleted === true).
-        // Single user: Jika user telah menyelesaikan hari ini (atau isAllCompleted).
         const idSop = sop.id_sop || '';
         const isDoneToday = (typeof isSopCompletedTodayByUser === 'function') && isSopCompletedTodayByUser(idSop, user, todayKey);
+
+        // 2. STATUS SELESAI:
+        // Multi-user: HANYA jika 100% user selesai (isAllCompleted === true).
+        // Single user: Jika user telah menyelesaikan hari ini (atau isAllCompleted).
         if (progress.isAllCompleted || (progress.totalAssigned <= 1 && isDoneToday)) {
             return 'Selesai';
         }
+        if (stLower === 'selesai' || (sop._adminManualStatus && String(sop._adminManualStatus).toLowerCase() === 'selesai')) {
+            return 'Selesai';
+        }
 
-        // 5. JIKA SUDAH ADA USER YANG MENYELESAIKAN SEBAGIAN (misal 1/3 atau 2/3 user):
-        // Pelaksanaan sudah dimulai -> WAJIB 'Belum Selesai' & TETAP di folder Belum Selesai!
+        // 3. REVISI V7.0.0 (PRESEDENSI MUTLAK MULTI-USER):
+        // Jika sudah ada user yang menyelesaikan sebagian (misal 1/3 atau 2/3 user):
+        // Status MUTLAK "Belum Selesai" dan kartu WAJIB berpindah ke folder "Belum Selesai"!
+        // Aturan ini MENDAHULUI status manual terbit/terjadwal!
         if (progress.completedCount > 0) {
             return 'Belum Selesai';
         }
 
-        // 6. JIKA BELUM ADA USER YANG SELESAI (completedCount === 0):
-        // Jika status master dari spreadsheet atau Admin di form adalah Terjadwal / Terbit,
-        // status WAJIB 100% 'Terjadwal' (tidak boleh dibajak oleh isDue jika pengerjaan masih 0!)
-        if (stLower === 'terjadwal' || stLower === 'terbit' || (sop._adminManualStatus && String(sop._adminManualStatus).toLowerCase() === 'terjadwal')) {
-            return 'Terjadwal';
+        // 4. JIKA BELUM ADA USER YANG SELESAI (completedCount === 0):
+        if (sop._adminManualStatus) {
+            const manualSt = String(sop._adminManualStatus).trim().toLowerCase();
+            if (manualSt === 'belum selesai' || manualSt === 'aktif' || manualSt === 'proses' || manualSt === 'dalam proses') return 'Belum Selesai';
         }
 
         const isDue = isSopScheduleTimeDue(sop, todayKey);
         if (isDue) {
             return 'Belum Selesai';
+        }
+
+        if (stLower === 'terjadwal' || stLower === 'terbit' || (sop._adminManualStatus && String(sop._adminManualStatus).toLowerCase() === 'terjadwal')) {
+            return 'Terjadwal';
         }
 
         // Selama waktu pelaksanaannya belum tiba, statusnya WAJIB 'Terjadwal'
@@ -60035,7 +60041,6 @@
                         total_assigned: progressBefore.totalAssigned,
                         percentage: Math.min(100, Math.round((newCompletedCount / progressBefore.totalAssigned) * 100)),
                         is_all_completed: isFinalUserCompleting,
-                        is_user_completed: true,
                         completed_by: curCompletedBy,
                         date_key: todayKey
                     };
@@ -60043,6 +60048,10 @@
                     filterAndRenderSopCards();
                     syncSopDashboardStatsRealtime();
                 }
+
+                // REVISI V7.0.0: Reset pointer notifikasi aktif agar jika user lain login di HP yang sama tidak terblokir
+                window._activeSopNotificationData = null;
+                window._activeSopAckKey = null;
 
                 // Hapus residu penanda universal lama agar akun lain di browser tidak terblokir
                 try {
@@ -60250,17 +60259,24 @@
 
         if (inCache && inCache.multi_user_progress && inCache.multi_user_progress.total_assigned > 1) {
             // MULTI-USER SOP:
-            // Cek apakah user u ini tercatat di completed_by
-            const uName = String(u?.nama || u?.name || u?.username || '').trim().toLowerCase();
+            // REVISI V7.0.0: Cek apakah user u ini tercatat di completed_by (nama, username, atau user_code)
+            const uName = String(u?.nama || u?.name || u?.nama_lengkap || '').trim().toLowerCase();
+            const uUname = String(u?.username || '').replace(/^@/, '').trim().toLowerCase();
+            const uCode = String(u?.id_user || u?.user_code || u?.id || '').trim().toLowerCase();
             const completedBy = inCache.multi_user_progress.completed_by || [];
             const isUserMatchedInCompletedBy = completedBy.some(cName => {
                 const normC = String(cName || '').replace(/[@_\-\s]+/g, '').toLowerCase();
                 const normU = uName.replace(/[@_\-\s]+/g, '').toLowerCase();
-                return (normC && normU && normC === normU);
+                const normUname = uUname.replace(/[@_\-\s]+/g, '').toLowerCase();
+                const normCode = uCode.replace(/[@_\-\s]+/g, '').toLowerCase();
+                return (normC && normU && (normC === normU || normC.includes(normU) || normU.includes(normC))) ||
+                       (normC && normUname && (normC === normUname || normC.includes(normUname) || normUname.includes(normC))) ||
+                       (normC && normCode && (normC === normCode || normC.includes(normCode) || normCode.includes(normC)));
             });
 
             if (isAdmin) {
                 if (inCache.multi_user_progress.is_all_completed) return true;
+                if (isUserMatchedInCompletedBy) return true;
             } else {
                 if (isUserMatchedInCompletedBy) return true;
             }
@@ -60268,12 +60284,6 @@
             // SINGLE USER / UMUM
             if (window._serverCompletedSopIdsSet && window._serverCompletedSopIdsSet.has(idSop)) {
                 return true;
-            }
-            if (inCache && inCache.multi_user_progress && inCache.multi_user_progress.is_user_completed === true) {
-                const progDate = inCache.multi_user_progress.date_key || inCache.multi_user_progress.tanggal || '';
-                if (!isRecDaily || !progDate || progDate === todayKey) {
-                    return true;
-                }
             }
             if (isAdmin && inCache && String(inCache.status || '').trim().toLowerCase() === 'selesai' && !isRecDaily) {
                 return true;
@@ -60870,16 +60880,15 @@
             sessionStorage.setItem(lastScheduleHashKey, scheduleHash);
             try { localStorage.setItem(lastScheduleHashKey, scheduleHash); } catch(e) {}
 
-            const lastPopTs = parseInt(sessionStorage.getItem(lastPopKey) || sessionStorage.getItem('tb_sop_last_pop_' + idSop) || '0', 10);
+            const lastPopTs = parseInt(sessionStorage.getItem(lastPopKey) || '0', 10);
             const isDebounced = (Date.now() - lastPopTs < 60000);
 
-            // Trigger kondisi Tahap 3:
+            // Trigger kondisi Tahap 3 & Overdue Catch-up V7.0.0:
             const shouldTrigger = isScheduleMatched && (!isSlotAlreadyFired || isScheduleEdited || isTestingMode) && (!isDebounced || isTestingMode);
 
             if (shouldTrigger) {
                 try { 
                     sessionStorage.setItem(lastPopKey, String(Date.now()));
-                    sessionStorage.setItem('tb_sop_last_pop_' + idSop, String(Date.now())); 
                     sessionStorage.setItem(slotAckKey, 'true');
                     localStorage.setItem(slotAckKey, 'true');
                 } catch(e) {}
@@ -62066,6 +62075,8 @@
             document.body.style.overflow = '';
             document.documentElement.style.overflow = '';
             if (typeof window.stopSopClockTicker === 'function') window.stopSopClockTicker();
+            window._activeSopNotificationData = null;
+            window._activeSopAckKey = null;
         }
         window.closeModulSOP = closeModulSOP;
 
@@ -63603,7 +63614,7 @@
                     sessionStorage.setItem(lastScheduleHashKey, scheduleHash);
                     try { localStorage.setItem(lastScheduleHashKey, scheduleHash); } catch(e) {}
 
-                    const lastPopTs = parseInt(sessionStorage.getItem(lastPopKey) || sessionStorage.getItem('tb_sop_last_pop_' + sop.id_sop) || '0', 10);
+                    const lastPopTs = parseInt(sessionStorage.getItem(lastPopKey) || '0', 10);
                     const isDebounced = (nowTs - lastPopTs < 60000);
 
                     // 5. Evaluasi jadwal jatuh tempo (WITA / Jam Lokal) secara Presisi
@@ -63687,7 +63698,6 @@
                     if (shouldTrigger) {
                         try { 
                             sessionStorage.setItem(lastPopKey, String(nowTs));
-                            sessionStorage.setItem('tb_sop_last_pop_' + sop.id_sop, String(nowTs)); 
                             sessionStorage.setItem(slotAckKey, 'true');
                             localStorage.setItem(slotAckKey, 'true');
                         } catch(e) {}
@@ -64163,6 +64173,40 @@
                 localStorage.removeItem('tb_tamara_user');
                 localStorage.removeItem('tb_tamara_current_user');
                 sessionStorage.clear();
+
+                // REVISI V7.0.0: Hard Session Teardown — Bersihkan pointer notifikasi SOP & residu antar-akun di HP yang sama
+                window._activeSopNotificationData = null;
+                window._activeSopAckKey = null;
+                window._sopExecutionState = null;
+                window._serverCompletedSopIdsSet = new Set();
+                window._sopMasterDataCache = null;
+
+                try {
+                    Object.keys(sessionStorage).forEach(k => {
+                        if (k.startsWith('tb_sop_')) sessionStorage.removeItem(k);
+                    });
+                    Object.keys(localStorage).forEach(k => {
+                        if (k.startsWith('tb_sop_ack_slot_') || k.startsWith('tb_sop_sch_hash_') || k.startsWith('tb_sop_server_completed_')) {
+                            localStorage.removeItem(k);
+                        }
+                    });
+
+                    // Bersihkan flag is_user_completed dari master data cache lokal
+                    const cachedRaw = localStorage.getItem('tb_sop_master_data_cache');
+                    if (cachedRaw) {
+                        try {
+                            const parsedList = JSON.parse(cachedRaw);
+                            if (Array.isArray(parsedList)) {
+                                parsedList.forEach(s => {
+                                    if (s && s.multi_user_progress) {
+                                        delete s.multi_user_progress.is_user_completed;
+                                    }
+                                });
+                                localStorage.setItem('tb_sop_master_data_cache', JSON.stringify(parsedList));
+                            }
+                        } catch(eParse) {}
+                    }
+                } catch(eClean) {}
             } catch (e) {}
 
             try {
