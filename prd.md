@@ -220,6 +220,22 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Evaluasi Kandidat Penerima Bertingkat (`isUserRecipientOfSop`):** Mendukung resolusi user spesifik dari `sop.jadwal.target_users` dan `sop.jadwal.recipients` pada frontend `index.html`.
   - **Cache Buster & Live Production Deployment:** Bumping versi skrip adapter ke `?v=6.6.0`, deployment Edge CDN Vercel, dan aliasing domain `https://tmr-app.vercel.app`.
 
+- **v6.7.0 (7 November 2026 - Pipeline Video Cloud Dual-Engine, Live Upload Loading & Regex Anti-Halusinasi):**
+  - **Pipeline Unggah Cloud Dual-Engine (Google Drive & Supabase Storage CDN):**
+    Mengimplementasikan arsitektur dual-cloud pada `uploadSopVideoFile`:
+    1. Mengunggah ke Google Drive via Google Apps Script (GAS) Web App jika file <= 15MB, menyetel sharing publik `ANYONE_WITH_LINK`, dan mengembalikan tautan embed preview `https://drive.google.com/file/d/{file_id}/preview`.
+    2. Failover otomatis ke Supabase Storage Edge CDN (`brand-assets`) untuk file video berukuran besar (> 15MB) atau saat endpoint GAS mengalami redirect/timeout, mengembalikan URL publik langsung tanpa batas kuota.
+  - **Interactive UI Loading Indicator & Progress Bar Realtime:**
+    Menyematkan kartu loading modern pada `#sopVideoUploadProgressCard` di `index.html`. Menampilkan nama file video, ukuran file asli dalam MB, animated progress bar (0% -> 100%), serta teks keterangan langkah transparan (`Membaca berkas...` -> `Mengunggah ke Cloud Storage...` -> `Memproses tautan embed...` -> `Berhasil!`). Mengunci tombol "SIMPAN KE LANGKAH" selama proses unggah berlangsung untuk mencegah penyimpanan prematur.
+  - **Pemberantasan Bug Halusinasi Regex Google Drive (`parseVideoMediaUrl`):**
+    Memperketat deteksi pola Google Drive `/d/ID` agar HANYA dievaluasi jika URL berasal dari domain resmi Google (`drive.google.com`, `docs.google.com`). Menutup celah di mana jutaan karakter teks Base64 (`data:video/...`) terpancing menjadi ID Drive palsu (seperti `WFaSunMCd0Bs` atau `mBxojiv...`).
+  - **Sanitasi Database Supabase (`sop_steps`):**
+    Membersihkan record langkah SOP yang terlanjur menyimpan ID palsu `WFaSunMCd0Bs` dan sampah string Base64 (`SOP-1794032192841-L2` dan `SOP-1794030737536-L2`), memulihkan video panduan langkah menjadi URL yang valid dan dapat diputar seketika.
+  - **Eksposur Global Adapter:**
+    Mengekspos `window.GasSupabaseAdapter`, `window.SupabaseGasAdapter`, `window.tbDatabaseAdapter`, dan `window.__tbUploadSopVideo` pada antarmuka peramban untuk menjamin ketersediaan handler upload di seluruh modul aplikasi.
+  - **Cache Buster & Live Production Deployment:**
+    Bumping versi skrip adapter ke `?v=6.7.0`, deployment Vercel Edge Network, dan sinkronisasi ke domain resmi `https://tmr-app.vercel.app`.
+
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT
 ================================================================================

@@ -5909,11 +5909,12 @@
             };
         },
 
-        uploadSopVideoFile: async function(fileOrBlob, filename, currentUser) {
+        uploadSopVideoFile: async function(fileOrBlob, filename, currentUser, onProgress) {
             const sb = getClient();
             if (!sb) return { success: false, message: 'Database disconnected' };
             try {
-                const ext = (filename && filename.includes('.')) ? filename.split('.').pop() : 'mp4';
+                if (typeof onProgress === 'function') onProgress(15);
+                const ext = (filename && filename.includes('.')) ? filename.split('.').pop().toLowerCase() : 'mp4';
                 const safeFilename = 'sop_video_' + Date.now() + '.' + ext;
                 let blobData;
                 let mimeType = 'video/' + (ext === 'mov' ? 'quicktime' : ext);
@@ -5939,9 +5940,67 @@
                     return { success: false, message: 'Data video tidak valid.' };
                 }
 
+                const sizeStr = (blobData.size > 1024 * 1024) 
+                    ? ((blobData.size / (1024 * 1024)).toFixed(1) + ' MB') 
+                    : (Math.round(blobData.size / 1024) + ' KB');
+
+                if (typeof onProgress === 'function') onProgress(35);
+
+                // JALUR 1: Coba Unggah ke Google Drive via GAS (jika file <= 15MB)
+                const gasEndpoint = window.__TB_GAS_BACKEND_URL || DEFAULT_GAS_URL;
+                if (gasEndpoint && blobData.size <= 15 * 1024 * 1024 && typeof FileReader !== 'undefined') {
+                    try {
+                        if (typeof onProgress === 'function') onProgress(45);
+                        const b64 = await new Promise((resolve, reject) => {
+                            const r = new FileReader();
+                            r.onload = () => resolve(r.result);
+                            r.onerror = reject;
+                            r.readAsDataURL(blobData);
+                        });
+
+                        const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                        const tId = controller ? setTimeout(() => controller.abort(), 6000) : null;
+
+                        const gasRes = await fetch(gasEndpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            body: JSON.stringify({
+                                action: 'uploadFileDirectToDrive',
+                                base64Data: b64,
+                                filenamePrefix: 'sop_vid_' + (filename || 'video').replace(/[^a-zA-Z0-9_-]/g, '_')
+                            }),
+                            signal: controller ? controller.signal : undefined,
+                            redirect: 'follow'
+                        });
+                        if (tId) clearTimeout(tId);
+
+                        const gasJson = await gasRes.json();
+                        if (gasJson && gasJson.success && gasJson.file_id) {
+                            if (typeof onProgress === 'function') onProgress(90);
+                            const drivePreviewUrl = 'https://drive.google.com/file/d/' + gasJson.file_id + '/preview';
+                            const driveViewUrl = 'https://drive.google.com/file/d/' + gasJson.file_id + '/view';
+                            return {
+                                success: true,
+                                url: drivePreviewUrl,
+                                direct_url: drivePreviewUrl,
+                                embedUrl: drivePreviewUrl,
+                                file_id: gasJson.file_id,
+                                size: sizeStr,
+                                storage_provider: 'Google Drive',
+                                message: 'Video SOP berhasil diunggah ke Google Drive!'
+                            };
+                        }
+                    } catch (eGas) {
+                        console.warn('[Adapter uploadSopVideoFile GAS attempt fallback to Supabase]', eGas);
+                    }
+                }
+
+                // JALUR 2: Supabase Storage CDN (Bucket 'brand-assets')
+                if (typeof onProgress === 'function') onProgress(60);
                 const SUPABASE_SERVICE_ROLE = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhZ3BsdWtxb3R5Y3BzbGh2bmJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5Mzg1OTk5MSwiZXhwIjoyMTA5NDM1OTkxfQ.XMLMoGtJTk03RQ076h0vS8-dOnPpwOHCi3nY2ctjyN4';
                 const uploadUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/brand-assets/' + encodeURIComponent(safeFilename);
 
+                if (typeof onProgress === 'function') onProgress(75);
                 const uploadRes = await fetch(uploadUrl, {
                     method: 'POST',
                     headers: {
@@ -5955,21 +6014,21 @@
 
                 if (!uploadRes.ok) {
                     const errText = await uploadRes.text();
-                    throw new Error('Gagal unggah video ke Supabase Storage: ' + errText);
+                    throw new Error('Gagal unggah video ke Cloud Storage: ' + errText);
                 }
 
+                if (typeof onProgress === 'function') onProgress(95);
                 const publicUrl = DEFAULT_SUPABASE_URL + '/storage/v1/object/public/brand-assets/' + encodeURIComponent(safeFilename);
-                const sizeStr = (blobData.size > 1024 * 1024) 
-                    ? ((blobData.size / (1024 * 1024)).toFixed(1) + ' MB') 
-                    : (Math.round(blobData.size / 1024) + ' KB');
 
                 return {
                     success: true,
                     url: publicUrl,
                     direct_url: publicUrl,
+                    embedUrl: publicUrl,
                     file_id: safeFilename,
                     size: sizeStr,
-                    message: 'Video SOP berhasil diunggah ke Supabase Cloud CDN!'
+                    storage_provider: 'Cloud Storage (Supabase CDN)',
+                    message: 'Video SOP berhasil diunggah ke Cloud Storage CDN!'
                 };
             } catch (err) {
                 console.error('[Adapter uploadSopVideoFile error]', err);
@@ -7307,7 +7366,7 @@
         return proxy;
     }
 
-    // Pasang ke window.google.script.run
+    // Pasang ke window.google.script.run dan window global adapter
     window.google = window.google || {};
     window.google.script = window.google.script || {};
     
@@ -7317,6 +7376,13 @@
         },
         configurable: true
     });
+
+    window.GasSupabaseAdapter = apiServices;
+    window.SupabaseGasAdapter = apiServices;
+    window.tbDatabaseAdapter = apiServices;
+    window.__tbUploadSopVideo = function(fileOrBlob, filename, currentUser, onProgress) {
+        return apiServices.uploadSopVideoFile(fileOrBlob, filename, currentUser, onProgress);
+    };
 
     // =========================================================================
     // 4. GOOGLE DRIVE CDN PHOTO HELPER (lh3.googleusercontent.com)

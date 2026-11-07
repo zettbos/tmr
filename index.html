@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.6.0"></script>
+    <script src="./supabase-gas-adapter.js?v=6.7.0"></script>
 
 </head>
 
@@ -49884,18 +49884,30 @@
                                 <i class="fa-solid fa-video"></i>
                             </div>
                             <p class="text-xs font-black text-slate-800">Pilih File Video dari HP / Laptop</p>
-                            <p class="text-[10.5px] text-slate-500 font-semibold mt-1">Mendukung MP4, WebM, MOV. Diunggah langsung ke Cloud Edge CDN.</p>
+                            <p class="text-[10.5px] text-slate-500 font-semibold mt-1">Mendukung MP4, WebM, MOV. Diunggah otomatis ke Google Drive / Cloud Storage.</p>
                             <input type="file" id="sopVideoDirectFileInput" accept="video/mp4,video/webm,video/quicktime" class="hidden" onchange="handleDirectVideoFileChosen(this)">
                         </div>
 
-                        <!-- Progress Bar Upload -->
-                        <div id="sopVideoUploadProgressCard" class="hidden bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-1.5">
-                            <div class="flex items-center justify-between text-xs font-bold text-slate-800">
-                                <span id="sopVideoUploadFileName" class="truncate max-w-[200px]">Mengunggah video...</span>
-                                <span id="sopVideoUploadStatusText" class="text-purple-600 font-black">0%</span>
+                        <!-- Progress Bar Upload Interaktif -->
+                        <div id="sopVideoUploadProgressCard" class="hidden bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3 shadow-xs">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-10 h-10 rounded-xl bg-purple-100 text-purple-600 flex items-center justify-center text-base shrink-0 animate-pulse">
+                                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center justify-between">
+                                        <h4 id="sopVideoUploadFileName" class="text-xs font-black text-slate-900 truncate">Mengunggah video...</h4>
+                                        <span id="sopVideoUploadPercentText" class="text-xs font-black text-purple-600 ml-2">0%</span>
+                                    </div>
+                                    <p id="sopVideoUploadFileSize" class="text-[10.5px] text-slate-500 font-semibold">Google Drive / Cloud CDN</p>
+                                </div>
                             </div>
-                            <div class="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                                <div id="sopVideoUploadProgressBar" class="bg-gradient-to-r from-purple-600 to-blue-600 h-2 rounded-full w-0 transition-all duration-300"></div>
+                            <div class="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden p-0.5 shadow-inner">
+                                <div id="sopVideoUploadProgressBar" class="bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 h-full rounded-full transition-all duration-300 w-0"></div>
+                            </div>
+                            <div id="sopVideoUploadStepText" class="text-[11px] font-bold text-slate-600 flex items-center gap-1.5 pt-0.5">
+                                <i class="fa-solid fa-circle-notch fa-spin text-purple-600"></i>
+                                <span>Menghubungkan ke Cloud Storage...</span>
                             </div>
                         </div>
                     </div>
@@ -49908,7 +49920,7 @@
                     class="py-2.5 px-3 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-black text-xs transition cursor-pointer active:scale-95 text-center">
                     BATAL
                 </button>
-                <button type="button" onclick="simpanVideoKeLangkahSop()"
+                <button type="button" id="btnSimpanVideoKeLangkah" onclick="simpanVideoKeLangkahSop()"
                     class="py-2.5 px-3 rounded-xl bg-[#0066ff] hover:bg-blue-600 text-white font-black text-xs transition cursor-pointer active:scale-95 text-center shadow-md shadow-blue-500/20 flex items-center justify-center space-x-1.5">
                     <i class="fa-solid fa-check text-xs"></i>
                     <span>SIMPAN KE LANGKAH</span>
@@ -54545,28 +54557,34 @@
             };
         }
 
-        // 2. Google Drive Detection (/file/d/ID, ?id=ID, /d/ID)
-        let driveId = '';
-        const gdMatch1 = str.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-        const gdMatch2 = str.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-        const gdMatch3 = str.match(/\/d\/([a-zA-Z0-9_-]+)/);
-        if (gdMatch1) driveId = gdMatch1[1];
-        else if (gdMatch2) driveId = gdMatch2[1];
-        else if (gdMatch3) driveId = gdMatch3[1];
+        // 2. Google Drive Detection (/file/d/ID, ?id=ID, /d/ID) - HANYA jika domain resmi Google Drive
+        const isGoogleDriveDomain = str.includes('drive.google.com') || 
+                                    str.includes('docs.google.com') || 
+                                    str.includes('drive.usercontent.google.com');
 
-        if (driveId) {
-            return {
-                type: 'gdrive',
-                id: driveId,
-                url: str,
-                embedUrl: 'https://drive.google.com/file/d/' + driveId + '/preview',
-                directUrl: 'https://drive.google.com/file/d/' + driveId + '/view',
-                label: 'Google Drive',
-                isValid: true
-            };
+        if (isGoogleDriveDomain) {
+            let driveId = '';
+            const gdMatch1 = str.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+            const gdMatch2 = str.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+            const gdMatch3 = str.match(/\/d\/([a-zA-Z0-9_-]+)/);
+            if (gdMatch1) driveId = gdMatch1[1];
+            else if (gdMatch2) driveId = gdMatch2[1];
+            else if (gdMatch3) driveId = gdMatch3[1];
+
+            if (driveId) {
+                return {
+                    type: 'gdrive',
+                    id: driveId,
+                    url: str,
+                    embedUrl: 'https://drive.google.com/file/d/' + driveId + '/preview',
+                    directUrl: 'https://drive.google.com/file/d/' + driveId + '/view',
+                    label: 'Google Drive',
+                    isValid: true
+                };
+            }
         }
 
-        // 3. Direct Video URLs (MP4 / WebM / Supabase Storage / blob)
+        // 3. Direct Video URLs (MP4 / WebM / MOV / Supabase Storage / blob)
         if (str.startsWith('http://') || str.startsWith('https://') || str.startsWith('blob:') || str.startsWith('data:video/')) {
             return {
                 type: 'direct',
@@ -54612,7 +54630,7 @@
     }
     window.handleSopVideoUrlInput = handleSopVideoUrlInput;
 
-    function handleDirectVideoFileChosen(inputEl) {
+    async function handleDirectVideoFileChosen(inputEl) {
         if (!inputEl || !inputEl.files || !inputEl.files[0]) return;
         const file = inputEl.files[0];
         _activeVideoUploadFile = file;
@@ -54624,58 +54642,102 @@
             titleInput.value = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
         }
 
-        // Tampilkan progress
+        const sizeInMb = (file.size / (1024 * 1024)).toFixed(1);
+        const sizeStr = file.size > 1024 * 1024 ? (sizeInMb + ' MB') : (Math.round(file.size / 1024) + ' KB');
+
+        // Tampilkan progress UI interaktif & sembunyikan dropzone
+        const dropzone = document.getElementById('sopVideoUploadDropzone');
         const progCard = document.getElementById('sopVideoUploadProgressCard');
         const nameEl = document.getElementById('sopVideoUploadFileName');
-        const statusText = document.getElementById('sopVideoUploadStatusText');
+        const sizeEl = document.getElementById('sopVideoUploadFileSize');
+        const percentEl = document.getElementById('sopVideoUploadPercentText');
         const progBar = document.getElementById('sopVideoUploadProgressBar');
+        const stepText = document.getElementById('sopVideoUploadStepText');
+        const saveBtn = document.getElementById('btnSimpanVideoKeLangkah');
 
+        if (dropzone) dropzone.classList.add('hidden');
         if (progCard) progCard.classList.remove('hidden');
         if (nameEl) nameEl.innerText = file.name;
-        if (statusText) statusText.innerText = 'Mengunggah ke Cloud...';
-        if (progBar) progBar.style.width = '45%';
+        if (sizeEl) sizeEl.innerText = sizeStr + ' • Google Drive / Cloud Storage';
+        if (percentEl) percentEl.innerText = '10%';
+        if (progBar) progBar.style.width = '10%';
+        if (stepText) stepText.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-purple-600"></i> <span>Menyiapkan berkas video...</span>';
 
-        const adapter = window.GasSupabaseAdapter || window.SupabaseGasAdapter;
+        if (saveBtn) {
+            saveBtn.disabled = true;
+            saveBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i><span>Sedang Mengunggah...</span>';
+        }
+
+        function updateProgress(pct, msg) {
+            if (percentEl) percentEl.innerText = pct + '%';
+            if (progBar) progBar.style.width = pct + '%';
+            if (stepText) {
+                stepText.innerHTML = (pct >= 100)
+                    ? '<i class="fa-solid fa-circle-check text-emerald-500"></i> <span class="text-emerald-700 font-bold">' + msg + '</span>'
+                    : '<i class="fa-solid fa-circle-notch fa-spin text-purple-600"></i> <span>' + msg + '</span>';
+            }
+        }
+
         const u = getCurrentAppUser();
+        const adapterUpload = (typeof window.__tbUploadSopVideo === 'function') 
+            ? window.__tbUploadSopVideo 
+            : (window.GasSupabaseAdapter?.uploadSopVideoFile || window.SupabaseGasAdapter?.uploadSopVideoFile);
 
-        if (adapter && typeof adapter.uploadSopVideoFile === 'function') {
-            adapter.uploadSopVideoFile(file, file.name, u).then(res => {
-                if (res && res.success && res.url) {
-                    if (statusText) statusText.innerText = '100% Selesai';
-                    if (progBar) progBar.style.width = '100%';
+        try {
+            updateProgress(25, 'Menghubungkan ke Cloud Storage...');
+
+            let res = null;
+            if (typeof adapterUpload === 'function') {
+                res = await adapterUpload(file, file.name, u, function(pct) {
+                    const scaled = Math.min(95, Math.max(25, Math.round(pct)));
+                    updateProgress(scaled, 'Mengunggah video (' + scaled + '%)...');
+                });
+            } else {
+                throw new Error('Adapter pengunggah cloud belum siap. Silakan muat ulang halaman.');
+            }
+
+            if (res && res.success && (res.url || res.direct_url)) {
+                const finalUrl = res.url || res.direct_url;
+                updateProgress(100, 'Berhasil! Video siap diputar.');
+
+                setTimeout(() => {
                     const urlInput = document.getElementById('sopVideoUrlInput');
                     if (urlInput) {
-                        urlInput.value = res.url;
-                        handleSopVideoUrlInput(res.url);
+                        urlInput.value = finalUrl;
+                        handleSopVideoUrlInput(finalUrl);
                     }
+
+                    if (saveBtn) {
+                        saveBtn.disabled = false;
+                        saveBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                        saveBtn.innerHTML = '<i class="fa-solid fa-check text-xs mr-1.5"></i><span>SIMPAN KE LANGKAH</span>';
+                    }
+
+                    if (dropzone) dropzone.classList.remove('hidden');
+                    if (progCard) progCard.classList.add('hidden');
+
                     switchSopVideoTab('link');
                     if (typeof showCustomToast === 'function') {
-                        showCustomToast('Video berhasil diunggah ke Supabase Cloud!', 'success');
+                        const providerName = res.storage_provider || 'Cloud Storage';
+                        showCustomToast('Video berhasil diunggah ke ' + providerName + '!', 'success');
                     }
-                } else {
-                    if (statusText) statusText.innerText = 'Gagal: ' + (res?.message || 'Error');
-                    if (typeof showCustomToast === 'function') {
-                        showCustomToast('Gagal upload video: ' + (res?.message || 'Error'), 'warning');
-                    }
-                }
-            }).catch(err => {
-                console.error('[uploadSopVideoFile error]', err);
-                if (statusText) statusText.innerText = 'Gagal upload';
-            });
-        } else {
-            // Local fallback
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                if (statusText) statusText.innerText = 'Siap (Mode Lokal)';
-                if (progBar) progBar.style.width = '100%';
-                const urlInput = document.getElementById('sopVideoUrlInput');
-                if (urlInput) {
-                    urlInput.value = e.target.result;
-                    handleSopVideoUrlInput(e.target.result);
-                }
-                switchSopVideoTab('link');
-            };
-            reader.readAsDataURL(file);
+                }, 600);
+            } else {
+                throw new Error(res?.message || 'Gagal mengunggah video ke cloud');
+            }
+        } catch (err) {
+            console.error('[handleDirectVideoFileChosen error]', err);
+            updateProgress(0, 'Gagal: ' + (err.message || 'Error'));
+            if (typeof showCustomToast === 'function') {
+                showCustomToast('Gagal upload video: ' + (err.message || 'Error'), 'warning');
+            }
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                saveBtn.innerHTML = '<i class="fa-solid fa-check text-xs mr-1.5"></i><span>SIMPAN KE LANGKAH</span>';
+            }
+            if (dropzone) dropzone.classList.remove('hidden');
         }
     }
     window.handleDirectVideoFileChosen = handleDirectVideoFileChosen;
