@@ -236,6 +236,14 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Cache Buster & Live Production Deployment:**
     Bumping versi skrip adapter ke `?v=6.7.0`, deployment Vercel Edge Network, dan sinkronisasi ke domain resmi `https://tmr-app.vercel.app`.
 
+- **v6.8.0 (7 November 2026 - Multi-User Broadcast Targeting Presisi & WebSocket Live Realtime SOP Progress):**
+  - **Normalisasi Multi-Identifier Backend (`getActiveSopBroadcast`):** Mengeliminasi jebakan evaluasi UUID database pada `curId`. Memeriksa seluruh identifier pengguna secara paralel (`user_code`, `id_user`, `username`, `id` UUID) dan melakukan sanitasi spasi ganda (`/\s+/g` -> `' '`) pada nama pengguna (`profiles.full_name`), memastikan target Driver 1, Driver 2, Staff Toko, dst (3+ user) 100% menerima notifikasi pop-up tanpa ada yang tereliminasi.
+  - **Isolasi Ekstraksi Nomor Pengguna Frontend (`generateSopUserAliases` & `checkUserTargetMatch`):** Menutup celah di mana regex `\b0*(\d+)\b` menangkap angka arbitrer dari string kode `USR-004`/`USR-005` atau UUID database (`22d842c4...`) yang memicu salah kamar dan skipping verifikasi target penerima. Ekstraksi nomor driver dan checker kini diisolasi murni dari `username` (`driver1` -> 1, `driver2` -> 2) dan nama bersih (`01 PENGANTARAN` -> 1, `02 PENGANTARAN` -> 2).
+  - **Pendaftaran WebSocket Supabase Realtime untuk SOP (`initSupabaseRealtime`):** Mendaftarkan listener realtime WebSocket pada tabel `sop_execution_logs` dan `sop_masters`. Setiap kali driver atau staff menekan "Selesai", event dikirimkan seketika ke seluruh perangkat admin/owner yang sedang membuka aplikasi secara 0ms latency.
+  - **Live Reactive In-Place DOM Update (`index.html`):** Menambahkan handler `handleRealtimeSopExecutionLogEvent` dan `handleRealtimeSopMasterEvent`. Saat event log tiba, sistem secara instan memanggil `fetchSopList(null, false)` dan `syncSopDashboardStatsRealtime()`. Badge persentase penyelesaian di layar Amir (`Penyelesaian: X/Y User (Z%)`) langsung naik secara realtime tanpa perlu reload browser (F5), dan kartu SOP otomatis berpindah folder dari `Terjadwal` -> `Belum Selesai` -> `Selesai`.
+  - **Audio Chime & Live Toast untuk Admin:** Memberikan feedback visual dan audio instan ke layar Admin saat karyawan menyelesaikan SOP (`"SOP Selesai: [Nama Karyawan] telah menyelesaikan SOP!"`).
+  - **Cache Buster & Live Production Deployment:** Bumping versi skrip adapter ke `?v=6.8.0`, commit, push ke GitHub `main`, deployment Vercel Edge Network, dan verifikasi live di `https://tmr-app.vercel.app`.
+
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT
 ================================================================================

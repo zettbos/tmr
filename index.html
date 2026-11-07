@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.7.0"></script>
+    <script src="./supabase-gas-adapter.js?v=6.8.0"></script>
 
 </head>
 
@@ -51676,7 +51676,8 @@
                   (Array.isArray(sop.recipients) ? sop.recipients : []));
 
             if (tUsers && tUsers.length > 0 && !tUsers.includes('ALL') && !tUsers.includes('Semua User')) {
-                targetCount = tUsers.length;
+                const distinctCodes = tUsers.filter(u => typeof u === 'string' && u.toUpperCase().startsWith('USR-'));
+                targetCount = distinctCodes.length > 0 ? distinctCodes.length : tUsers.length;
                 tUsers.forEach(u => {
                     targetIdentities.push({ id: '', nama: String(u).toLowerCase().trim() });
                 });
@@ -51717,7 +51718,7 @@
         }
 
         if (backendTotal > 0) {
-            targetCount = Math.max(targetCount, backendTotal);
+            targetCount = backendTotal;
             if (targetCount > 1) {
                 isSpecific = true;
             }
@@ -52505,6 +52506,49 @@
         }
     }
     window.fetchSopList = fetchSopList;
+
+    function handleRealtimeSopExecutionLogEvent(payload) {
+        console.log('[Realtime SOP Event Handler]', payload);
+        if (!payload) return;
+        const curUser = (typeof getCurrentAppUser === 'function') ? getCurrentAppUser() : (window.currentUser || null);
+        const uRole = String(curUser?.role || '').toLowerCase();
+        const isAdmin = !curUser || uRole.includes('admin') || uRole.includes('super') || uRole.includes('kasir') || uRole.includes('owner');
+
+        // Segarkan data master SOP dan render kartu secara realtime
+        if (typeof fetchSopList === 'function') {
+            fetchSopList(null, false);
+        }
+        if (typeof syncSopDashboardStatsRealtime === 'function') {
+            syncSopDashboardStatsRealtime();
+        }
+
+        // Tampilkan feedback toast bagi Admin saat driver/staff menyelesaikan SOP
+        if (isAdmin && (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE')) {
+            const row = payload.new || {};
+            const userName = row.full_name || row.username || 'Karyawan';
+            if (typeof showCustomToast === 'function') {
+                showCustomToast(`SOP Selesai: ${userName} telah menyelesaikan SOP!`, 'success');
+            }
+            if (typeof window.playNewOrderSound === 'function') {
+                try { window.playNewOrderSound(); } catch (e) {}
+            }
+        }
+    }
+    window.handleRealtimeSopExecutionLogEvent = handleRealtimeSopExecutionLogEvent;
+
+    function handleRealtimeSopMasterEvent(payload) {
+        console.log('[Realtime SOP Master Event Handler]', payload);
+        if (typeof fetchSopList === 'function') {
+            fetchSopList(null, false);
+        }
+        if (typeof syncSopDashboardStatsRealtime === 'function') {
+            syncSopDashboardStatsRealtime();
+        }
+        if (typeof window.checkSopBroadcastPopup === 'function') {
+            setTimeout(window.checkSopBroadcastPopup, 800);
+        }
+    }
+    window.handleRealtimeSopMasterEvent = handleRealtimeSopMasterEvent;
 
     function triggerManualSopSyncFromSheet() {
         const icon = document.getElementById('iconSyncSopSpin');
@@ -53813,15 +53857,29 @@
 
         const specificDriverTokens = [];
         selectedUsersList.forEach(u => {
-            const uText = (u.id + ' ' + u.name + ' ' + u.username + ' ' + (u.role || '')).toLowerCase();
-            const isDrv = uText.includes('sopir') || uText.includes('driver') || uText.includes('pengantaran');
-            const numMatch = uText.match(/\b0*(\d+)\b/);
-            if (isDrv && numMatch) {
-                const num = parseInt(numMatch[1], 10);
+            const uRole = String(u.role || '').toLowerCase();
+            const uUname = String(u.username || '').toLowerCase();
+            const uName = String(u.name || '').toLowerCase();
+            const isDrv = uRole.includes('sopir') || uRole.includes('driver') || uUname.includes('driver') || uName.includes('pengantaran');
+            
+            // Ekstrak nomor driver HANYA dari username atau nama (bukan dari kode ID USR-004)
+            let num = null;
+            const uMatch = uUname.match(/(\d+)/);
+            if (uMatch) {
+                num = parseInt(uMatch[1], 10);
+            } else {
+                const cleanN = uName.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+                const nMatch = cleanN.match(/\b0*(\d+)\b/);
+                if (nMatch) num = parseInt(nMatch[1], 10);
+            }
+
+            if (isDrv && num !== null) {
                 const pad = String(num).padStart(2, '0');
-                specificDriverTokens.push('sopir ' + num, 'sopir ' + pad, 'driver ' + num, 'driver ' + pad, pad + ' pengantaran', 'pengantaran ' + pad);
+                specificDriverTokens.push('sopir ' + num, 'sopir ' + pad, 'driver ' + num, 'driver ' + pad, pad + ' pengantaran', 'pengantaran ' + pad, '0' + num + ' pengantaran');
             }
         });
+
+        const cleanSelectedNames = selectedNames.map(n => String(n).replace(/\s+/g, ' ').trim()).filter(Boolean);
 
         const checkAllEl = document.getElementById('sopSelectAllPenerimaCheck');
         const isCheckAllChecked = checkAllEl ? checkAllEl.checked : false;
@@ -53832,7 +53890,7 @@
         const isAllUser = (isCheckAllChecked && totalUsers > 0 && totalSelected === totalUsers);
         let allTargetsCombined = isAllUser 
             ? ['ALL'] 
-            : [...new Set([...selectedIds, ...selectedUsernames, ...selectedNames, ...specificDriverTokens])].filter(Boolean);
+            : [...new Set([...selectedIds, ...selectedUsernames, ...selectedNames, ...cleanSelectedNames, ...specificDriverTokens])].filter(Boolean);
 
         // REVISI v6.2.0: Safety Fallback - Jika diterbitkan tanpa user terpilih, otomatis fallback ke ALL agar SOP tidak hilang ke ruang hampa!
         const shouldFallbackToAll = !isAllUser && (allTargetsCombined.length === 0) && (statusTarget === 'Terbit' || s.status === 'Terjadwal' || s.status === 'Aktif');
@@ -60229,46 +60287,57 @@
     function generateSopUserAliases(user) {
         if (!user) return [];
         const aliases = [];
-        const id = (user.id_user || user.id || user.user_id || '').toString().trim();
-        const name = (user.nama || user.name || user.nama_lengkap || '').toString().trim();
-        const uname = (user.username || '').toString().trim();
+        const id = (user.id_user || user.id || user.user_id || user.user_code || '').toString().trim();
+        const userCode = (user.user_code || user.id_user || '').toString().trim();
+        const rawId = (user.id || user.user_id || '').toString().trim();
+        const name = (user.nama || user.name || user.nama_lengkap || user.full_name || '').toString().trim();
+        const uname = (user.username || '').toString().replace(/^@/, '').trim();
         const role = (user.role || user.jabatan || user.level || '').toString().trim();
 
         if (id) aliases.push(id, id.toLowerCase());
+        if (userCode && userCode !== id) aliases.push(userCode, userCode.toLowerCase());
+        if (rawId && rawId !== id) aliases.push(rawId, rawId.toLowerCase());
+
         if (name) {
             aliases.push(name, name.toLowerCase());
-            const cleanName = name.replace(/\s*\([^)]*\)/g, '').trim();
+            const cleanName = name.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
             if (cleanName && cleanName !== name) aliases.push(cleanName, cleanName.toLowerCase());
         }
         if (uname) aliases.push(uname, uname.toLowerCase());
         if (role) aliases.push(role, role.toLowerCase());
 
-        const allText = (id + ' ' + name + ' ' + uname + ' ' + role).toLowerCase();
+        const roleText = (name + ' ' + uname + ' ' + role).toLowerCase();
 
-        // Ekstrak angka driver/checker/staff jika ada
-        const numMatch = allText.match(/\b0*(\d+)\b/) || uname.match(/(\d+)/);
-        let num = numMatch ? parseInt(numMatch[1], 10) : null;
+        // Ekstrak angka driver/checker/staff HANYA dari username atau nama bersih (JANGAN dari ID/UUID/user_code!)
+        let num = null;
+        const uMatch = uname.match(/(\d+)/);
+        if (uMatch) {
+            num = parseInt(uMatch[1], 10);
+        } else {
+            const cleanN = name.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+            const nMatch = cleanN.match(/\b0*(\d+)\b/);
+            if (nMatch) num = parseInt(nMatch[1], 10);
+        }
+
         // Checker 1 adalah checker utama jika username 'checker' atau nama 'staff pengecekan' tanpa angka
-        if (num === null && (uname === 'checker' || allText.includes('staff pengecekan'))) {
+        if (num === null && (uname === 'checker' || roleText.includes('staff pengecekan'))) {
             num = 1;
         }
         const numPad = num !== null ? String(num).padStart(2, '0') : null;
 
         if (num !== null) {
-            if (allText.includes('sopir') || allText.includes('driver') || allText.includes('pengantaran') || allText.includes('drv')) {
+            if (roleText.includes('sopir') || roleText.includes('driver') || roleText.includes('pengantaran') || roleText.includes('drv')) {
                 aliases.push('sopir ' + num, 'sopir ' + numPad, 'sopir' + num, 'sopir' + numPad);
                 aliases.push('driver ' + num, 'driver ' + numPad, 'driver' + num, 'driver' + numPad);
                 aliases.push(numPad + ' pengantaran', 'pengantaran ' + numPad, num + ' pengantaran', 'pengantaran ' + num);
                 aliases.push('0' + num + ' pengantaran', 'pengantaran 0' + num);
                 aliases.push('usr-drv-' + numPad, 'drv-' + numPad, 'usr-drv-' + num, 'drv-' + num);
                 aliases.push('usr-00' + num, 'usr-0' + num);
-            } else if (allText.includes('karnet') || allText.includes('krn') || allText.includes('kernet') || allText.includes('helper')) {
+            } else if (roleText.includes('karnet') || roleText.includes('krn') || roleText.includes('kernet') || roleText.includes('helper')) {
                 aliases.push('karnet ' + num, 'karnet ' + numPad, 'karnet' + num, 'karnet' + numPad);
                 aliases.push('karnet armada ' + numPad, 'karnet armada ' + num);
                 aliases.push('usr-krn-' + numPad, 'krn-' + numPad);
-            } else if (allText.includes('checker') || allText.includes('chk') || allText.includes('pengecek') || allText.includes('pengecekan')) {
-                // HANYA buat alias bernomor presisi untuk checker (Checker 1 vs Checker 2)!
-                // DILARANG push kata umum 'checker' tanpa nomor agar Checker 2 tidak mencocokkan Checker 1
+            } else if (roleText.includes('checker') || roleText.includes('chk') || roleText.includes('pengecek') || roleText.includes('pengecekan')) {
                 aliases.push('checker ' + num, 'checker ' + numPad, 'checker' + num, 'checker' + numPad);
                 aliases.push('chk ' + num, 'chk' + num, 'chk-' + numPad, 'usr-chk-' + numPad);
                 if (num === 1) {
@@ -60276,7 +60345,7 @@
                 } else if (num === 2) {
                     aliases.push('checker 2', 'checker2', 'checker 02');
                 }
-            } else if (allText.includes('kasir') || allText.includes('staff') || allText.includes('gudang') || allText.includes('ops')) {
+            } else if (roleText.includes('kasir') || roleText.includes('staff') || roleText.includes('gudang') || roleText.includes('ops')) {
                 aliases.push('kasir ' + num, 'kasir ' + numPad, 'kasir' + num, 'kasir' + numPad);
                 aliases.push('staff ' + num, 'staff ' + numPad);
                 aliases.push('usr-staff-' + numPad, 'staff-' + numPad);
@@ -60297,23 +60366,28 @@
         });
         if (isAll) return true;
 
-        const uId = (currentUser.id_user || currentUser.id || currentUser.user_id || '').toString().toLowerCase().trim();
-        const uName = (currentUser.nama || currentUser.name || currentUser.nama_lengkap || '').toString().toLowerCase().trim();
+        const uId = (currentUser.id_user || currentUser.id || currentUser.user_id || currentUser.user_code || '').toString().toLowerCase().trim();
+        const uCode = (currentUser.user_code || currentUser.id_user || '').toString().toLowerCase().trim();
+        const uRawId = (currentUser.id || currentUser.user_id || '').toString().toLowerCase().trim();
+        const uName = (currentUser.nama || currentUser.name || currentUser.nama_lengkap || currentUser.full_name || '').toString().toLowerCase().trim();
         const uUsername = (currentUser.username || '').toString().replace(/^@/, '').toLowerCase().trim();
         const uRole = (currentUser.role || currentUser.jabatan || '').toString().toLowerCase().trim();
 
-        // Bersihkan tanda kurung role pada nama, misal "AMI (Admin)" -> "ami", "STAFF PENGECEKAN (Checker)" -> "staff pengecekan"
-        const cleanUName = uName.replace(/\s*\([^)]*\)/g, '').trim();
+        // Bersihkan tanda kurung role pada nama dan spasi ganda
+        const cleanUName = uName.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
 
-        // Ekstrak angka unik user (misal: driver1 -> 1, driver2 -> 2, checker2 -> 2, checker -> 1)
-        const uNumMatch = (uId + ' ' + uName + ' ' + uUsername).match(/\b0*(\d+)\b/) || uUsername.match(/(\d+)/);
-        let uNum = uNumMatch ? parseInt(uNumMatch[1], 10) : null;
-        if (uNum === null && (uUsername === 'checker' || cleanUName === 'staff pengecekan')) {
+        // Ekstrak angka unik user HANYA dari username atau nama bersih (JANGAN dari ID/UUID/user_code!)
+        let uNum = null;
+        const uNumMatch = uUsername.match(/(\d+)/) || cleanUName.match(/\b0*(\d+)\b/);
+        if (uNumMatch) {
+            uNum = parseInt(uNumMatch[1], 10);
+        } else if (uUsername === 'checker' || cleanUName.includes('staff pengecekan')) {
             uNum = 1; // Checker 1 default
         }
 
         // Himpun alias pengguna aktif
         const aliases = (typeof generateSopUserAliases === 'function') ? generateSopUserAliases(currentUser) : [];
+        const userIdentifiers = [uCode, uRawId, uId].filter(Boolean);
 
         for (let i = 0; i < targetCandidates.length; i++) {
             const tRaw = targetCandidates[i];
@@ -60325,8 +60399,8 @@
             let tStr = '';
 
             if (typeof tRaw === 'object') {
-                tId = String(tRaw.id_user || tRaw.id || tRaw.user_id || '').toLowerCase().trim();
-                tName = String(tRaw.name || tRaw.nama || tRaw.nama_lengkap || '').toLowerCase().trim();
+                tId = String(tRaw.id_user || tRaw.id || tRaw.user_id || tRaw.user_code || '').toLowerCase().trim();
+                tName = String(tRaw.name || tRaw.nama || tRaw.nama_lengkap || tRaw.full_name || '').toLowerCase().trim();
                 tUsername = String(tRaw.username || '').replace(/^@/, '').toLowerCase().trim();
                 tStr = (tId + ' ' + tName + ' ' + tUsername).trim();
             } else {
@@ -60341,27 +60415,23 @@
 
             if (!tStr) continue;
 
-            // 1. Direct ID match (PERSIS)
-            if (uId && tId && uId === tId) return true;
-
-            // 2. Direct Username match (PERSIS - DILARANG .includes() agar checker2 tidak cocok ke checker!)
-            if (uUsername && tUsername && uUsername === tUsername) return true;
-
-            // 3. Name match persis
-            const cleanTName = tName.replace(/\s*\([^)]*\)/g, '').trim();
-            if (cleanUName && cleanTName && cleanUName === cleanTName) return true;
-
-            // Ekstrak angka target jika ada
-            const tNumMatch = tStr.match(/\b0*(\d+)\b/) || (tUsername && tUsername.match(/(\d+)/));
-            let tNum = tNumMatch ? parseInt(tNumMatch[1], 10) : null;
-            if (tNum === null && (tUsername === 'checker' || cleanTName === 'staff pengecekan' || tStr === 'checker')) {
-                tNum = 1;
+            // 1. Direct ID match (PERSIS terhadap semua identifier user: kode USR-xxx, UUID, dll)
+            if (userIdentifiers.length > 0) {
+                if (tId && userIdentifiers.includes(tId)) return true;
+                if (userIdentifiers.includes(tStr)) return true;
             }
 
-            // Jika user dan target sama-sama memiliki angka spesifik (misal Checker 1 vs Checker 2, Driver 1 vs Driver 2)
-            // dan nomornya BERBEDA, MAKA DILARANG KERAS MENCOCOKKAN!
-            if (uNum !== null && tNum !== null && uNum !== tNum) {
-                continue;
+            // 2. Direct Username match (PERSIS)
+            if (uUsername) {
+                if (tUsername && uUsername === tUsername) return true;
+                if (uUsername === tStr) return true;
+            }
+
+            // 3. Name match persis (dengan normalisasi spasi ganda)
+            const cleanTName = tName.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+            if (cleanUName && cleanTName) {
+                if (cleanUName === cleanTName) return true;
+                if (cleanTName.length >= 4 && (cleanUName.includes(cleanTName) || cleanTName.includes(cleanUName))) return true;
             }
 
             // 4. Aliases Match Persis
@@ -60369,6 +60439,18 @@
                 if (aliases.includes(tStr) || (tId && aliases.includes(tId)) || (tUsername && aliases.includes(tUsername)) || (cleanTName && aliases.includes(cleanTName))) {
                     return true;
                 }
+            }
+
+            // Ekstrak angka target jika ada (HANYA dari username atau nama, bukan token umum)
+            const tNumMatch = (tUsername && tUsername.match(/(\d+)/)) || cleanTName.match(/\b0*(\d+)\b/);
+            let tNum = tNumMatch ? parseInt(tNumMatch[1], 10) : null;
+            if (tNum === null && (tUsername === 'checker' || cleanTName.includes('staff pengecekan') || tStr === 'checker')) {
+                tNum = 1;
+            }
+
+            // Jika user dan target sama-sama memiliki angka spesifik dan BERBEDA, dilarang mencocokkan
+            if (uNum !== null && tNum !== null && uNum !== tNum) {
+                continue;
             }
 
             // 5. Driver / Checker Number Match

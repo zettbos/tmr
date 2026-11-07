@@ -5077,13 +5077,14 @@
                     } else {
                         const addedIds = new Set();
                         profiles.forEach(p => {
-                            const pId = String(p.id || '').toLowerCase();
-                            const pCode = String(p.user_code || '').toLowerCase();
-                            const pUname = String(p.username || '').toLowerCase();
-                            const pName = String(p.full_name || '').toLowerCase();
+                            const pId = String(p.id || '').toLowerCase().trim();
+                            const pCode = String(p.user_code || '').toLowerCase().trim();
+                            const pUname = String(p.username || '').toLowerCase().replace(/^@/, '').trim();
+                            const pName = String(p.full_name || '').toLowerCase().replace(/\s+/g, ' ').trim();
                             const matched = tUsers.some(tu => {
-                                const s = String(tu).toLowerCase().trim();
-                                return s === pId || s === pCode || s === pUname || s === pName;
+                                const s = String(tu).toLowerCase().replace(/^@/, '').trim();
+                                const cleanS = s.replace(/\s+/g, ' ');
+                                return s === pId || s === pCode || s === pUname || cleanS === pName || pName.includes(cleanS) || cleanS.includes(pName);
                             });
                             if (matched && !addedIds.has(pCode || pId)) {
                                 addedIds.add(pCode || pId);
@@ -5306,13 +5307,14 @@
                     } else {
                         const addedIds = new Set();
                         profiles.forEach(p => {
-                            const pId = String(p.id || '').toLowerCase();
-                            const pCode = String(p.user_code || '').toLowerCase();
-                            const pUname = String(p.username || '').toLowerCase();
-                            const pName = String(p.full_name || '').toLowerCase();
+                            const pId = String(p.id || '').toLowerCase().trim();
+                            const pCode = String(p.user_code || '').toLowerCase().trim();
+                            const pUname = String(p.username || '').toLowerCase().replace(/^@/, '').trim();
+                            const pName = String(p.full_name || '').toLowerCase().replace(/\s+/g, ' ').trim();
                             const matched = tUsers.some(tu => {
-                                const s = String(tu).toLowerCase().trim();
-                                return s === pId || s === pCode || s === pUname || s === pName;
+                                const s = String(tu).toLowerCase().replace(/^@/, '').trim();
+                                const cleanS = s.replace(/\s+/g, ' ');
+                                return s === pId || s === pCode || s === pUname || cleanS === pName || pName.includes(cleanS) || cleanS.includes(pName);
                             });
                             if (matched && !addedIds.has(pCode || pId)) {
                                 addedIds.add(pCode || pId);
@@ -5700,11 +5702,12 @@
                 });
 
                 const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(userId || ''));
+                const userUname = payload.username || currentUser?.username || String(userId || 'USR-001');
                 const logRow = {
                     id: logId,
                     sop_id: sopId,
                     user_id: isValidUuid ? userId : null,
-                    username: String(userId || 'USR-001'),
+                    username: userUname,
                     full_name: userName,
                     role: userRole,
                     task_date: tgl,
@@ -7117,18 +7120,19 @@
                     const st = String(l.status || '').toLowerCase().trim();
                     if (st !== 'selesai' && st !== 'disetujui' && st !== 'sudah selesai') return;
 
-                    const lUid = String(l.user_id || '').toLowerCase().trim();
-                    const lUname = String(l.username || '').toLowerCase().trim();
-                    const lName = String(l.full_name || l.user_name || '').toLowerCase().trim();
+                    const lUids = [String(l.user_id || ''), String(l.username || '')].map(x => x.toLowerCase().trim()).filter(Boolean);
+                    const lName = String(l.full_name || l.user_name || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-                    const curId = String(u.id || u.id_user || u.user_code || '').toLowerCase().trim();
-                    const curUname = String(u.username || '').toLowerCase().trim();
-                    const curName = String(u.nama || u.full_name || '').toLowerCase().trim();
+                    const curUuids = [String(u.id || ''), String(u.user_id || '')].map(x => x.toLowerCase().trim()).filter(Boolean);
+                    const curCodes = [String(u.id_user || ''), String(u.user_code || '')].map(x => x.toLowerCase().trim()).filter(Boolean);
+                    const curUname = String(u.username || '').toLowerCase().replace(/^@/, '').trim();
+                    const curName = String(u.nama || u.full_name || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-                    const isMatch = (curId && (lUid === curId || lUname === curId)) ||
-                                    (curUname && (lUname === curUname || lUid === curUname)) ||
-                                    (curName && (lName.includes(curName) || curName.includes(lName)));
-                    if (isMatch) {
+                    const allCurIdentifiers = [...curUuids, ...curCodes, curUname].filter(Boolean);
+                    const isIdMatch = allCurIdentifiers.some(cid => lUids.includes(cid));
+                    const isNameMatch = curName && lName && (lName === curName || lName.includes(curName) || curName.includes(lName));
+
+                    if (isIdMatch || isNameMatch) {
                         if (!completedIdsToday.includes(l.sop_id)) completedIdsToday.push(l.sop_id);
                     }
                 });
@@ -7188,21 +7192,26 @@
                     };
                 }).filter(s => {
                     // Double check apakah user yang login ini adalah target penerima
-                    const tgtRoles = (s.jadwal.target_roles || []).map(r => String(r).toLowerCase());
-                    const tgtUsers = (s.jadwal.target_users || []).map(tu => String(tu).toLowerCase());
+                    const tgtRoles = (s.jadwal.target_roles || []).map(r => String(r).toLowerCase().trim());
+                    const tgtUsers = (s.jadwal.target_users || []).map(tu => String(tu).toLowerCase().trim());
                     
                     if (tgtRoles.length === 0 && tgtUsers.length === 0) return true;
                     if (tgtUsers.includes('all') || tgtRoles.includes('all')) return true;
 
-                    const curId = String(u.id || u.id_user || u.user_code || '').toLowerCase().trim();
-                    const curUname = String(u.username || '').toLowerCase().trim();
-                    const curName = String(u.nama || u.full_name || '').toLowerCase().trim();
+                    const curUuids = [String(u.id || ''), String(u.user_id || '')].map(x => x.toLowerCase().trim()).filter(Boolean);
+                    const curUserCodes = [String(u.id_user || ''), String(u.user_code || '')].map(x => x.toLowerCase().trim()).filter(Boolean);
+                    const curUname = String(u.username || '').toLowerCase().replace(/^@/, '').trim();
+                    const curName = String(u.nama || u.full_name || '').toLowerCase().replace(/\s+/g, ' ').trim();
                     const curRole = String(u.role || '').toLowerCase().trim();
 
-                    if (curRole && tgtRoles.includes(curRole)) return true;
-                    if (curId && tgtUsers.includes(curId)) return true;
+                    if (curRole && tgtRoles.some(r => curRole.includes(r) || r.includes(curRole))) return true;
+                    if (curUserCodes.some(c => tgtUsers.includes(c))) return true;
+                    if (curUuids.some(uuid => tgtUsers.includes(uuid))) return true;
                     if (curUname && tgtUsers.includes(curUname)) return true;
-                    if (curName && tgtUsers.some(tu => curName.includes(tu) || tu.includes(curName))) return true;
+                    if (curName && tgtUsers.some(tu => {
+                        const cleanTu = String(tu).toLowerCase().replace(/\s+/g, ' ').trim();
+                        return cleanTu === curName || cleanTu.includes(curName) || curName.includes(cleanTu);
+                    })) return true;
 
                     return false;
                 });
@@ -7542,13 +7551,31 @@
                         try { window.checkActiveEmergencyBroadcast(); } catch (e) {}
                     }
                 })
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_execution_logs' }, (payload) => {
+                    console.log('[Realtime TMR] Perubahan data SOP Execution Logs:', payload.eventType, payload.new?.sop_id || payload.old?.sop_id);
+                    if (typeof window.handleRealtimeSopExecutionLogEvent === 'function') {
+                        try { window.handleRealtimeSopExecutionLogEvent(payload); } catch(e) {}
+                    }
+                    if (typeof window.fetchSopList === 'function') {
+                        try { window.fetchSopList(null, true); } catch (e) {}
+                    }
+                    if (typeof window.syncSopDashboardStatsRealtime === 'function') {
+                        try { window.syncSopDashboardStatsRealtime(); } catch (e) {}
+                    }
+                })
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_masters' }, (payload) => {
-                    console.log('[Realtime TMR] Perubahan data SOP Master:', payload.eventType);
+                    console.log('[Realtime TMR] Perubahan data SOP Master:', payload.eventType, payload.new?.id || payload.old?.id);
+                    if (typeof window.handleRealtimeSopMasterEvent === 'function') {
+                        try { window.handleRealtimeSopMasterEvent(payload); } catch(e) {}
+                    }
                     if (typeof window.checkSopBroadcastPopup === 'function') {
                         try { window.checkSopBroadcastPopup(); } catch (e) {}
                     }
                     if (typeof window.fetchSopList === 'function') {
                         try { window.fetchSopList(null, true); } catch (e) {}
+                    }
+                    if (typeof window.syncSopDashboardStatsRealtime === 'function') {
+                        try { window.syncSopDashboardStatsRealtime(); } catch (e) {}
                     }
                 })
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'system_configs' }, (payload) => {
