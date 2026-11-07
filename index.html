@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.5.0"></script>
+    <script src="./supabase-gas-adapter.js?v=6.6.0"></script>
 
 </head>
 
@@ -60397,8 +60397,14 @@
         if (Array.isArray(sop.target_users)) {
             candidates.push(...sop.target_users);
         }
+        if (sop.jadwal && Array.isArray(sop.jadwal.target_users)) {
+            candidates.push(...sop.jadwal.target_users);
+        }
         if (Array.isArray(sop.recipients)) {
             candidates.push(...sop.recipients);
+        }
+        if (sop.jadwal && Array.isArray(sop.jadwal.recipients)) {
+            candidates.push(...sop.jadwal.recipients);
         }
 
         const validCandidates = candidates.filter(c => {

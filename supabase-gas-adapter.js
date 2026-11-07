@@ -4999,19 +4999,48 @@
             if (!sb) return { success: false, stats: { total_sop: 0, draft: 0, terjadwal: 0, selesai: 0, dalam_proses: 0 }, sop_terbaru: [] };
 
             try {
-                const [mastersRes, targetsRes, logsRes] = await Promise.all([
+                let todayStr = '';
+                try {
+                    const dtf = new Intl.DateTimeFormat('en-GB', {
+                        timeZone: 'Asia/Makassar',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    });
+                    const parts = dtf.formatToParts(new Date());
+                    const p = {};
+                    parts.forEach(part => { p[part.type] = part.value; });
+                    todayStr = `${p.year}-${p.month}-${p.day}`;
+                } catch(eDate) {
+                    const nowUtc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                    const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                    todayStr = `${wita.getFullYear()}-${String(wita.getMonth() + 1).padStart(2, '0')}-${String(wita.getDate()).padStart(2, '0')}`;
+                }
+
+                const [mastersRes, targetsRes, logsRes, profilesRes] = await Promise.all([
                     sb.from('sop_masters').select('*').order('created_at', { ascending: false }),
                     sb.from('sop_targets').select('*'),
-                    sb.from('sop_execution_logs').select('*')
+                    sb.from('sop_execution_logs').select('*').eq('task_date', todayStr),
+                    sb.from('profiles').select('id, user_code, full_name, username, role')
                 ]);
 
                 const masters = mastersRes.data || [];
                 const targets = targetsRes.data || [];
                 const logs = logsRes.data || [];
+                const profiles = profilesRes.data || [];
 
                 const targetMap = {};
                 targets.forEach(t => {
                     targetMap[t.sop_id] = t;
+                });
+
+                const logsMap = {};
+                logs.forEach(l => {
+                    const st = String(l.status || '').toLowerCase().trim();
+                    if (st === 'selesai' || st === 'disetujui' || st === 'sudah selesai') {
+                        if (!logsMap[l.sop_id]) logsMap[l.sop_id] = [];
+                        logsMap[l.sop_id].push(l);
+                    }
                 });
 
                 let totalSop = 0;
@@ -5024,26 +5053,78 @@
 
                 masters.forEach(m => {
                     totalSop++;
-                    const st = (m.status || 'Draft').trim();
-                    const stLower = st.toLowerCase();
-                    if (stLower === 'draft') draftCount++;
-                    else if (stLower === 'selesai') selesaiHariIni++;
-                    else if (stLower === 'belum selesai' || stLower === 'proses' || stLower === 'dalam proses') dalamProsesHariIni++;
-                    else terbitHariIni++; // 'Terjadwal' / 'Terbit'
-
                     const t = targetMap[m.id] || {};
-                    let times = t.schedule_times || ['22.32 WITA'];
+                    let times = t.schedule_times || [];
                     if (typeof times === 'string') {
                         try { times = JSON.parse(times); } catch(e) { times = [times]; }
                     }
+                    if (!Array.isArray(times) || times.length === 0) {
+                        times = ['08.00 WITA'];
+                    }
                     const cleanJamList = times.map(j => String(j || '').replace(/\s*wita\b/gi, '').trim()).filter(Boolean);
 
-                    const completedLogs = logs.filter(l => l.sop_id === m.id && (l.approval_status === 'Selesai' || l.approval_status === 'Disetujui'));
+                    // Dynamic multi-user calculation
+                    const tUsers = Array.isArray(t.target_users) ? t.target_users : [];
+                    const isAllUsers = tUsers.length === 0 || tUsers.includes('ALL') || tUsers.includes('Semua User');
 
-                    const pUsers = [
-                        { id: 'USR-002', nama: 'TAMARA BANGUNAN', selected: true },
-                        { id: 'USR-004', nama: '01 PENGANTARAN', selected: true }
-                    ];
+                    let pUsers = [];
+                    if (isAllUsers) {
+                        pUsers = profiles.filter(p => p.role !== 'Super Admin').map(p => ({
+                            id: p.user_code || p.id,
+                            nama: p.full_name || p.username,
+                            selected: true
+                        }));
+                    } else {
+                        const addedIds = new Set();
+                        profiles.forEach(p => {
+                            const pId = String(p.id || '').toLowerCase();
+                            const pCode = String(p.user_code || '').toLowerCase();
+                            const pUname = String(p.username || '').toLowerCase();
+                            const pName = String(p.full_name || '').toLowerCase();
+                            const matched = tUsers.some(tu => {
+                                const s = String(tu).toLowerCase().trim();
+                                return s === pId || s === pCode || s === pUname || s === pName;
+                            });
+                            if (matched && !addedIds.has(pCode || pId)) {
+                                addedIds.add(pCode || pId);
+                                pUsers.push({
+                                    id: p.user_code || p.id,
+                                    nama: p.full_name || p.username,
+                                    selected: true
+                                });
+                            }
+                        });
+                    }
+                    const totalAssigned = Math.max(1, pUsers.length);
+
+                    const completedLogs = logsMap[m.id] || [];
+                    const completedKeys = new Set();
+                    const completedNames = [];
+                    completedLogs.forEach(cl => {
+                        const uKey = String(cl.user_id || cl.username || cl.full_name || '').toLowerCase().trim();
+                        if (uKey && !completedKeys.has(uKey)) {
+                            completedKeys.add(uKey);
+                            const dName = cl.full_name || cl.username || uKey;
+                            if (!completedNames.includes(dName)) completedNames.push(dName);
+                        }
+                    });
+
+                    const completedCount = completedKeys.size;
+                    const percentage = Math.min(100, Math.round((completedCount / totalAssigned) * 100));
+                    const isAllCompleted = (completedCount >= totalAssigned && totalAssigned > 0);
+
+                    let st = (m.status || 'Draft').trim();
+                    const stLower = st.toLowerCase();
+                    if (stLower !== 'draft') {
+                        if (isAllCompleted) st = 'Selesai';
+                        else if (completedCount > 0) st = 'Belum Selesai';
+                        else st = (stLower === 'selesai' || stLower === 'belum selesai') ? 'Terjadwal' : st;
+                    }
+
+                    if (st.toLowerCase() === 'draft') draftCount++;
+                    else if (st.toLowerCase() === 'selesai') selesaiHariIni++;
+                    else if (st.toLowerCase() === 'belum selesai' || st.toLowerCase() === 'proses' || st.toLowerCase() === 'dalam proses') dalamProsesHariIni++;
+                    else terbitHariIni++; // 'Terjadwal' / 'Terbit'
 
                     let createdAtStr = m.created_at || '2026-10-25T22:29:00';
                     let cDateStr = '25-10-2026 22:29 WITA';
@@ -5076,7 +5157,7 @@
                         created_at: cDateStr,
                         created_by: m.created_by || 'Admin',
                         jadwal: {
-                            jam_list: cleanJamList.length > 0 ? cleanJamList : ['22.32'],
+                            jam_list: cleanJamList.length > 0 ? cleanJamList : ['08.00'],
                             jam_tayang: times,
                             berulang_harian: t.is_recurring_daily !== false,
                             is_recurring_daily: t.is_recurring_daily !== false,
@@ -5088,11 +5169,17 @@
                         },
                         penerima_users: pUsers,
                         multi_user_progress: {
-                            completed_users: completedLogs.map(l => l.user_name),
-                            completed_count: completedLogs.length,
-                            target_count: 2,
-                            percent: 0,
-                            text: '0/2 User (0%)'
+                            total_assigned: totalAssigned,
+                            totalAssigned: totalAssigned,
+                            completed_count: completedCount,
+                            completedCount: completedCount,
+                            completed_by: completedNames,
+                            completedBy: completedNames,
+                            percentage: percentage,
+                            is_all_completed: isAllCompleted,
+                            isAllCompleted: isAllCompleted,
+                            text: `${completedCount}/${totalAssigned} User (${percentage}%)`,
+                            date_key: todayStr
                         }
                     });
                 });
@@ -5118,18 +5205,40 @@
 
         getSopList: async function(currentUser, filterStatus, searchQuery) {
             const sb = getClient();
-            if (!sb) return { success: false, data: [], counts: { semua: 0, aktif: 0, draft: 0, terbit: 0 } };
+            if (!sb) return { success: false, data: [], counts: { semua: 0, aktif: 0, draft: 0, terbit: 0, selesai: 0 } };
 
             try {
-                const [mastersRes, stepsRes, targetsRes] = await Promise.all([
+                let todayStr = '';
+                try {
+                    const dtf = new Intl.DateTimeFormat('en-GB', {
+                        timeZone: 'Asia/Makassar',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    });
+                    const parts = dtf.formatToParts(new Date());
+                    const p = {};
+                    parts.forEach(part => { p[part.type] = part.value; });
+                    todayStr = `${p.year}-${p.month}-${p.day}`;
+                } catch(eDate) {
+                    const nowUtc = Date.now() + (new Date().getTimezoneOffset() * 60000);
+                    const wita = new Date(nowUtc + (8 * 3600 * 1000));
+                    todayStr = `${wita.getFullYear()}-${String(wita.getMonth() + 1).padStart(2, '0')}-${String(wita.getDate()).padStart(2, '0')}`;
+                }
+
+                const [mastersRes, stepsRes, targetsRes, logsRes, profilesRes] = await Promise.all([
                     sb.from('sop_masters').select('*').order('created_at', { ascending: false }),
                     sb.from('sop_steps').select('*').order('step_number', { ascending: true }),
-                    sb.from('sop_targets').select('*')
+                    sb.from('sop_targets').select('*'),
+                    sb.from('sop_execution_logs').select('*').eq('task_date', todayStr),
+                    sb.from('profiles').select('id, user_code, full_name, username, role')
                 ]);
 
                 const masters = Array.isArray(mastersRes?.data) ? mastersRes.data : [];
                 const steps = Array.isArray(stepsRes?.data) ? stepsRes.data : [];
                 const targets = Array.isArray(targetsRes?.data) ? targetsRes.data : [];
+                const logs = Array.isArray(logsRes?.data) ? logsRes.data : [];
+                const profiles = Array.isArray(profilesRes?.data) ? profilesRes.data : [];
 
                 const stepsMap = {};
                 steps.forEach(s => {
@@ -5153,29 +5262,103 @@
                     targetMap[t.sop_id] = t;
                 });
 
+                const logsMap = {};
+                logs.forEach(l => {
+                    const st = String(l.status || '').toLowerCase().trim();
+                    if (st === 'selesai' || st === 'disetujui' || st === 'sudah selesai') {
+                        if (!logsMap[l.sop_id]) logsMap[l.sop_id] = [];
+                        logsMap[l.sop_id].push(l);
+                    }
+                });
+
                 let countSemua = 0;
-                let countAktif = 0;
                 let countDraft = 0;
                 let countTerbit = 0;
+                let countBelumSelesai = 0;
+                let countSelesai = 0;
+
+                const curUserKey = String(currentUser?.id || currentUser?.id_user || currentUser?.user_code || currentUser?.username || '').toLowerCase().trim();
+                const curUserName = String(currentUser?.nama || currentUser?.full_name || '').toLowerCase().trim();
 
                 const list = masters.map(m => {
                     countSemua++;
-                    const st = (m.status || 'Draft').trim();
-                    if (st.toLowerCase() === 'draft') countDraft++;
-                    else if (st.toLowerCase() === 'terjadwal' || st.toLowerCase() === 'terbit') countTerbit++;
-                    else countAktif++;
-
                     const t = targetMap[m.id] || {};
-                    let times = t.schedule_times || ['22.32 WITA'];
+                    let times = t.schedule_times || [];
                     if (typeof times === 'string') {
                         try { times = JSON.parse(times); } catch(e) { times = [times]; }
                     }
+                    if (!Array.isArray(times) || times.length === 0) {
+                        times = ['08.00 WITA'];
+                    }
                     const cleanJamList = times.map(j => String(j || '').replace(/\s*wita\b/gi, '').trim()).filter(Boolean);
 
-                    const pUsers = [
-                        { id: 'USR-002', nama: 'TAMARA BANGUNAN', selected: true },
-                        { id: 'USR-004', nama: '01 PENGANTARAN', selected: true }
-                    ];
+                    // Dynamic multi-user calculation
+                    const tUsers = Array.isArray(t.target_users) ? t.target_users : [];
+                    const isAllUsers = tUsers.length === 0 || tUsers.includes('ALL') || tUsers.includes('Semua User');
+
+                    let pUsers = [];
+                    if (isAllUsers) {
+                        pUsers = profiles.filter(p => p.role !== 'Super Admin').map(p => ({
+                            id: p.user_code || p.id,
+                            nama: p.full_name || p.username,
+                            selected: true
+                        }));
+                    } else {
+                        const addedIds = new Set();
+                        profiles.forEach(p => {
+                            const pId = String(p.id || '').toLowerCase();
+                            const pCode = String(p.user_code || '').toLowerCase();
+                            const pUname = String(p.username || '').toLowerCase();
+                            const pName = String(p.full_name || '').toLowerCase();
+                            const matched = tUsers.some(tu => {
+                                const s = String(tu).toLowerCase().trim();
+                                return s === pId || s === pCode || s === pUname || s === pName;
+                            });
+                            if (matched && !addedIds.has(pCode || pId)) {
+                                addedIds.add(pCode || pId);
+                                pUsers.push({
+                                    id: p.user_code || p.id,
+                                    nama: p.full_name || p.username,
+                                    selected: true
+                                });
+                            }
+                        });
+                    }
+                    const totalAssigned = Math.max(1, pUsers.length);
+
+                    const completedLogs = logsMap[m.id] || [];
+                    const completedKeys = new Set();
+                    const completedNames = [];
+                    completedLogs.forEach(cl => {
+                        const uKey = String(cl.user_id || cl.username || cl.full_name || '').toLowerCase().trim();
+                        if (uKey && !completedKeys.has(uKey)) {
+                            completedKeys.add(uKey);
+                            const dName = cl.full_name || cl.username || uKey;
+                            if (!completedNames.includes(dName)) completedNames.push(dName);
+                        }
+                    });
+
+                    const completedCount = completedKeys.size;
+                    const percentage = Math.min(100, Math.round((completedCount / totalAssigned) * 100));
+                    const isAllCompleted = (completedCount >= totalAssigned && totalAssigned > 0);
+
+                    // Evaluasi status dinamis berdasarkan pelaksanaan live
+                    let st = (m.status || 'Draft').trim();
+                    const stLower = st.toLowerCase();
+                    if (stLower !== 'draft') {
+                        if (isAllCompleted) {
+                            st = 'Selesai';
+                        } else if (completedCount > 0) {
+                            st = 'Belum Selesai';
+                        } else {
+                            st = (stLower === 'selesai' || stLower === 'belum selesai') ? 'Terjadwal' : st;
+                        }
+                    }
+
+                    if (st.toLowerCase() === 'draft') countDraft++;
+                    else if (st.toLowerCase() === 'selesai') countSelesai++;
+                    else if (st.toLowerCase() === 'belum selesai' || st.toLowerCase() === 'proses' || st.toLowerCase() === 'dalam proses') countBelumSelesai++;
+                    else countTerbit++; // Terjadwal / Terbit
 
                     let createdAtStr = m.created_at || '2026-10-25T22:29:00';
                     let cDateStr = '25-10-2026 22:29 WITA';
@@ -5199,6 +5382,14 @@
                         }
                     }
 
+                    const isUserCompleted = completedLogs.some(cl => {
+                        const lUid = String(cl.user_id || '').toLowerCase().trim();
+                        const lUname = String(cl.username || '').toLowerCase().trim();
+                        const lName = String(cl.full_name || '').toLowerCase().trim();
+                        return (curUserKey && (lUid === curUserKey || lUname === curUserKey)) ||
+                               (curUserName && (lName.includes(curUserName) || curUserName.includes(lName)));
+                    });
+
                     return {
                         id_sop: m.id,
                         judul_sop: m.title || '-',
@@ -5208,8 +5399,11 @@
                         langkah: stepsMap[m.id] || [],
                         langkah_list: stepsMap[m.id] || [],
                         created_at: cDateStr,
+                        target_type: isAllUsers ? 'ALL' : 'SPECIFIC',
+                        target_users: isAllUsers ? ['ALL'] : tUsers,
+                        recipients: isAllUsers ? 'ALL' : tUsers,
                         jadwal: {
-                            jam_list: cleanJamList.length > 0 ? cleanJamList : ['22.32'],
+                            jam_list: cleanJamList.length > 0 ? cleanJamList : ['08.00'],
                             jam_tayang: times,
                             berulang_harian: t.is_recurring_daily !== false,
                             is_recurring_daily: t.is_recurring_daily !== false,
@@ -5221,11 +5415,19 @@
                         },
                         penerima_users: pUsers,
                         multi_user_progress: {
-                            completed_users: [],
-                            completed_count: 0,
-                            target_count: 2,
-                            percent: 0,
-                            text: '0/2 User (0%)'
+                            total_assigned: totalAssigned,
+                            totalAssigned: totalAssigned,
+                            completed_count: completedCount,
+                            completedCount: completedCount,
+                            completed_by: completedNames,
+                            completedBy: completedNames,
+                            percentage: percentage,
+                            is_all_completed: isAllCompleted,
+                            isAllCompleted: isAllCompleted,
+                            is_user_completed: isUserCompleted,
+                            isUserCompleted: isUserCompleted,
+                            text: `${completedCount}/${totalAssigned} User (${percentage}%)`,
+                            date_key: todayStr
                         }
                     };
                 });
@@ -5235,14 +5437,17 @@
                     data: list,
                     counts: {
                         semua: countSemua,
-                        aktif: countAktif,
+                        aktif: countBelumSelesai,
                         draft: countDraft,
-                        terbit: countTerbit
+                        terbit: countTerbit,
+                        terjadwal: countTerbit,
+                        belum_selesai: countBelumSelesai,
+                        selesai: countSelesai
                     }
                 };
             } catch (err) {
                 console.error('[Adapter getSopList error]', err);
-                return { success: false, data: [], counts: { semua: 0, aktif: 0, draft: 0, terbit: 0 } };
+                return { success: false, data: [], counts: { semua: 0, aktif: 0, draft: 0, terbit: 0, selesai: 0 } };
             }
         },
 
@@ -5261,9 +5466,12 @@
                 const steps = sRes.data || [];
                 const t = tRes.data || {};
 
-                let times = t.schedule_times || ['22.32 WITA'];
+                let times = t.schedule_times || [];
                 if (typeof times === 'string') {
                     try { times = JSON.parse(times); } catch(e) { times = [times]; }
+                }
+                if (!Array.isArray(times) || times.length === 0) {
+                    times = ['08.00 WITA'];
                 }
 
                 return {
@@ -5365,9 +5573,12 @@
 
                 // 3. Simpan jadwal dan target ke sop_targets
                 const jdw = sPayload.jadwal || {};
-                let times = jdw.jam_tayang || jdw.jam_list || ['22.32 WITA'];
+                let times = jdw.jam_tayang || jdw.jam_list || [];
                 if (typeof times === 'string') {
                     try { times = JSON.parse(times); } catch(e) { times = [times]; }
+                }
+                if (!Array.isArray(times) || times.length === 0) {
+                    times = ['08.00 WITA'];
                 }
                 let targetRoles = Array.isArray(jdw.target_roles) ? jdw.target_roles :
                                     (Array.isArray(sPayload.target_roles) ? sPayload.target_roles : []);
@@ -6822,10 +7033,11 @@
                     todayStr = `${wita.getFullYear()}-${String(wita.getMonth() + 1).padStart(2, '0')}-${String(wita.getDate()).padStart(2, '0')}`;
                 }
 
-                // 1. Ambil SOP master yang statusnya Aktif / Terjadwal
+                // 1. Ambil SOP master yang aktif / berjalan (Aktif, Terjadwal, Belum Selesai) - kecualikan Draft & Selesai
                 const { data: masters, error: mErr } = await sb.from('sop_masters')
                     .select('*')
-                    .in('status', ['Aktif', 'Terjadwal']);
+                    .neq('status', 'Draft')
+                    .neq('status', 'Selesai');
 
                 if (mErr || !masters || masters.length === 0) {
                     return { success: true, sops: [], today_date_key: todayStr, completed_sop_ids_today: [] };
@@ -6837,15 +7049,27 @@
                 const [stepsRes, targetsRes, logsRes] = await Promise.all([
                     sb.from('sop_steps').select('*').in('sop_id', sopIds).order('step_number', { ascending: true }),
                     sb.from('sop_targets').select('*').in('sop_id', sopIds),
-                    sb.from('sop_execution_logs').select('sop_id').eq('task_date', todayStr)
+                    sb.from('sop_execution_logs').select('*').eq('task_date', todayStr)
                 ]);
 
                 // Filter log penyelesaian user hari ini
                 const completedIdsToday = [];
                 (logsRes.data || []).forEach(l => {
-                    const lUser = (l.user_id || l.user_code || '').toLowerCase();
-                    const lName = (l.user_name || '').toLowerCase();
-                    if (lUser === userCode.toLowerCase() || (userName && lName.includes(userName))) {
+                    const st = String(l.status || '').toLowerCase().trim();
+                    if (st !== 'selesai' && st !== 'disetujui' && st !== 'sudah selesai') return;
+
+                    const lUid = String(l.user_id || '').toLowerCase().trim();
+                    const lUname = String(l.username || '').toLowerCase().trim();
+                    const lName = String(l.full_name || l.user_name || '').toLowerCase().trim();
+
+                    const curId = String(u.id || u.id_user || u.user_code || '').toLowerCase().trim();
+                    const curUname = String(u.username || '').toLowerCase().trim();
+                    const curName = String(u.nama || u.full_name || '').toLowerCase().trim();
+
+                    const isMatch = (curId && (lUid === curId || lUname === curId)) ||
+                                    (curUname && (lUname === curUname || lUid === curUname)) ||
+                                    (curName && (lName.includes(curName) || curName.includes(lName)));
+                    if (isMatch) {
                         if (!completedIdsToday.includes(l.sop_id)) completedIdsToday.push(l.sop_id);
                     }
                 });
@@ -6869,6 +7093,17 @@
                 // Map & filter SOP yang relevan untuk user ini
                 const relevantSops = masters.map(m => {
                     const tgt = targetsMap[m.id] || {};
+                    let rawTimes = tgt.schedule_times || [];
+                    if (typeof rawTimes === 'string') {
+                        try { rawTimes = JSON.parse(rawTimes); } catch(e) { rawTimes = [rawTimes]; }
+                    }
+                    if (!Array.isArray(rawTimes) || rawTimes.length === 0) {
+                        rawTimes = ['08.00 WITA'];
+                    }
+                    const cleanJamList = rawTimes.map(j => String(j || '').replace(/\s*wita\b/gi, '').trim()).filter(Boolean);
+                    const targetUsers = Array.isArray(tgt.target_users) ? tgt.target_users : [];
+                    const isAllUsers = targetUsers.length === 0 || targetUsers.includes('ALL') || targetUsers.includes('Semua User');
+
                     return {
                         id_sop: m.id,
                         judul_sop: m.title,
@@ -6877,23 +7112,39 @@
                         status: m.status || 'Aktif',
                         kriteria_penyelesaian: m.completion_criteria || {},
                         langkah_langkah: stepsMap[m.id] || [],
+                        target_type: isAllUsers ? 'ALL' : 'SPECIFIC',
+                        target_users: isAllUsers ? ['ALL'] : targetUsers,
+                        recipients: isAllUsers ? 'ALL' : targetUsers,
                         jadwal: {
                             tanggal: tgt.start_date || todayStr,
-                            jam_tayang: tgt.schedule_times || ['20.00 WITA'],
+                            jam_list: cleanJamList.length > 0 ? cleanJamList : ['08.00'],
+                            jam_tayang: rawTimes,
                             berulang_harian: tgt.is_recurring_daily !== false,
+                            is_recurring_daily: tgt.is_recurring_daily !== false,
                             kirim_notif: tgt.is_notif_active !== false,
+                            is_notif_active: tgt.is_notif_active !== false,
                             target_roles: tgt.target_roles || [],
-                            target_users: tgt.target_users || []
+                            target_users: targetUsers
                         }
                     };
                 }).filter(s => {
+                    // Double check apakah user yang login ini adalah target penerima
                     const tgtRoles = (s.jadwal.target_roles || []).map(r => String(r).toLowerCase());
-                    const tgtUsers = (s.jadwal.target_users || []).map(u => String(u).toLowerCase());
+                    const tgtUsers = (s.jadwal.target_users || []).map(tu => String(tu).toLowerCase());
                     
                     if (tgtRoles.length === 0 && tgtUsers.length === 0) return true;
-                    if (userRole && tgtRoles.includes(userRole)) return true;
-                    if (userCode && tgtUsers.includes(userCode.toLowerCase())) return true;
-                    if (userName && tgtUsers.some(u => userName.includes(u))) return true;
+                    if (tgtUsers.includes('all') || tgtRoles.includes('all')) return true;
+
+                    const curId = String(u.id || u.id_user || u.user_code || '').toLowerCase().trim();
+                    const curUname = String(u.username || '').toLowerCase().trim();
+                    const curName = String(u.nama || u.full_name || '').toLowerCase().trim();
+                    const curRole = String(u.role || '').toLowerCase().trim();
+
+                    if (curRole && tgtRoles.includes(curRole)) return true;
+                    if (curId && tgtUsers.includes(curId)) return true;
+                    if (curUname && tgtUsers.includes(curUname)) return true;
+                    if (curName && tgtUsers.some(tu => curName.includes(tu) || tu.includes(curName))) return true;
+
                     return false;
                 });
 

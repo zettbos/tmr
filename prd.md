@@ -213,6 +213,12 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Pemulihan Data SOP Klien Amir:** Memulihkan record master SOP `SOP-1794009563853` (*"Pengantaran Muatan Berat & Semen"*, status *"Terjadwal"*) di database Supabase `sop_masters`, menyambungkan kembali 3 langkah kerja di `sop_steps` dan jadwal harian di `sop_targets`.
   - **Standarisasi Konversi Waktu WITA di Adapter (`getSopList` & `getSopDashboard`):** Mengonversi ISO timestamp dari PostgreSQL ke zona waktu WITA (UTC+8) secara akurat (`DD-MM-YYYY HH:mm WITA`).
   - **Cache Buster & Live Deployment:** Bumping cache buster script `supabase-gas-adapter.js?v=6.5.0` dan verifikasi live di `https://tmr-app.vercel.app`. Klien Amir dan seluruh user toko dapat langsung melihat SOP di folder "Terjadwal" cukup dengan merefresh halaman (F5).
+- **v6.6.0 (7 November 2026 - Realtime Multi-User SOP Progress, Presisi Jam Notifikasi & Cross-Role Broadcast):**
+  - **Kalkulasi Live Progres Multi-User (`getSopList` & `getSopDashboardData`):** Menghubungkan pembacaan tabel `sop_execution_logs` secara live hari ini pada layer adapter. Menghilangkan stub hardcode `0/2 User (0%)`, menghitung persentase dinamis `completedCount / totalAssigned * 100`, dan menetapkan status dinamis (`Belum Selesai` jika sebagian user selesai, `Selesai` jika seluruh user selesai).
+  - **Pemulihan Penyiaran Lintas-Role (`getActiveSopBroadcast`):** Memperluas query master SOP dengan status `Belum Selesai` (bukan hanya `Aktif` dan `Terjadwal`), menyediakan properti akar `target_users`, `recipients`, `target_type: 'SPECIFIC'`, dan mengekspos `jam_list: cleanJamList` di objek jadwal. Memastikan seluruh target penerima lintas-role (Staff Toko & Sopir) menerima popup notifikasi secara presisi pada jam jadwalnya.
+  - **Eliminasi Total Residu Hardcode `22.32 WITA`:** Menghapus seluruh nilai palsu `22.32 WITA` di 6 titik adapter dan menggantinya dengan jam jadwal asli dari database atau jam pembuatan SOP.
+  - **Evaluasi Kandidat Penerima Bertingkat (`isUserRecipientOfSop`):** Mendukung resolusi user spesifik dari `sop.jadwal.target_users` dan `sop.jadwal.recipients` pada frontend `index.html`.
+  - **Cache Buster & Live Production Deployment:** Bumping versi skrip adapter ke `?v=6.6.0`, deployment Edge CDN Vercel, dan aliasing domain `https://tmr-app.vercel.app`.
 
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT
