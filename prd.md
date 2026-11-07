@@ -258,6 +258,23 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Sinkronisasi Realtime Progres Backend (`getActiveSopBroadcast`):** Menambahkan injeksi objek `multi_user_progress` lengkap (`total_assigned`, `completed_count`, `completed_by`, `percentage`) langsung dari pembacaan `sop_execution_logs` hari ini pada layer adapter Supabase, memastikan seluruh perangkat klien menerima data progres terbaru secara instan.
   - **Cache Buster & Live Production Deployment:** Bumping versi skrip adapter ke `?v=7.0.0`, commit, push ke GitHub `main`, deployment Vercel Edge Network, dan sinkronisasi ke domain resmi `https://tmr-app.vercel.app`.
 
+- **v7.1.0 (7 November 2026 - Modal Pop-Up Rincian Penyelesaian Multi-User, Deduplikasi Log Backend & Penguatan Eksekusi Multi-Step):**
+  - **Modal Pop-Up Interaktif "Rincian Penyelesaian Multi-User" (`modalSopUserCompletionBreakdown`):**
+    Mengubah badge keterangan `Penyelesaian: X/Y User (Z%)` di kartu SOP daftar dan ringkasan dashboard menjadi tombol interaktif yang dapat diklik. Ketika diklik, memunculkan modal pop-up modern:
+    1. Header menampilkan judul SOP, kategori, dan jadwal hari ini.
+    2. Ringkasan visual animated progress bar (misal 67%) beserta status badge dinamis (`Belum Selesai (Menunggu X User)` vs `Selesai 100%`).
+    3. Daftar user ditugaskan (target users) lengkap dengan avatar inisial, nama staf, dan role:
+       - **Status Hijau (✅ Selesai):** Menampilkan jam selesai dalam format WITA, centang checklist 100%, serta tautan *"Lihat Foto"* untuk preview lightbox foto bukti jika ada.
+       - **Status Amber (⏳ Belum Selesai):** Menampilkan badge jam pasir dengan keterangan *"Menunggu pengerjaan SOP hari ini"*.
+    4. Tombol *"Muat Ulang Status"* untuk menyinkronkan data langsung dari Supabase tanpa me-reload halaman web.
+  - **Resolusi Target Unik Anti-Duplikasi Alias di Frontend (`getSopMultiUserProgress`):**
+    Menyaring target penerima SOP menjadi daftar orang unik (`distinctCodes` / `target_people`), mencegah nama alias (seperti `driver1`, `01 PENGANTARAN`, `driver 01`) menggandakan angka `completedCount` saat dievaluasi terhadap log.
+  - **Deduplikasi Log & Auto-Selesai Backend (`submitSopExecutionLog` & `getSopLogsBySopId`):**
+    Menghitung jumlah penyelesaian multi-user di backend menggunakan `Set` identitas pengguna unik (`username` / `full_name` / `user_id`). Mencegah hitungan ganda jika staf men-submit form lebih dari sekali. Ketika `completedCount >= totalAssigned`, server Supabase secara atomik mengupdate `sop_masters.status = 'Selesai'`, memicu WebSocket realtime untuk memindahkan kartu ke folder tab "Selesai" seketika.
+  - **Penguatan Alur Submit & Konfirmasi Sukses Multi-Step:**
+    Menyertakan parameter `tanggal: todayKey` (WITA lokal) secara eksplisit pada payload submit agar pencocokan log server tidak terpengaruh perbedaan zona waktu UTC. Mempertegas modal sukses pasca-submit dengan menampilkan nama pelaksana dan progres terkini (misal: *"🎉 Seluruh user telah selesai (100%)! SOP otomatis dipindahkan ke folder SELESAI"*).
+  - **Cache Buster & Live Production Deployment:** Bumping versi skrip adapter ke `?v=7.1.0`, commit, push ke GitHub `main`, deployment Vercel Edge Network, dan sinkronisasi ke domain resmi `https://tmr-app.vercel.app`.
+
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT
 ================================================================================

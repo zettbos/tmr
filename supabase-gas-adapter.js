@@ -5691,7 +5691,16 @@
                 const userId = payload.user_id || currentUser?.id_user || currentUser?.id || 'USR-001';
                 const userName = payload.user_nama || currentUser?.nama || currentUser?.full_name || 'User Pelaksana';
                 const userRole = payload.user_role || currentUser?.role || 'Staff';
-                const tgl = payload.tanggal || new Date().toISOString().slice(0, 10);
+                
+                // REVISI V7.1.0: Hitung tanggal WITA (UTC+8) jika tidak dikirim dalam payload
+                let tgl = payload.tanggal;
+                if (!tgl || typeof tgl !== 'string' || tgl.trim() === '') {
+                    const nowWita = new Date(Date.now() + (8 * 60 * 60 * 1000));
+                    tgl = nowWita.toISOString().slice(0, 10);
+                } else {
+                    tgl = tgl.trim();
+                }
+
                 const jam = payload.jam_tayang || '00:00:00';
                 const statusEksekusi = payload.status_eksekusi || 'Selesai';
 
@@ -5734,8 +5743,20 @@
                 const distinctAssigned = [...new Set((targetData.target_users || []).filter(u => u && u.startsWith('USR-')))];
                 const totalAssigned = distinctAssigned.length > 0 ? distinctAssigned.length : 2;
 
-                const completedLogs = (allLogsRes?.data || []).filter(l => l.status === 'Selesai');
-                const completedCount = completedLogs.length;
+                // REVISI V7.1.0: Deduplikasi user yang sudah selesai berbasis identitas unik
+                const completedUserKeys = new Set();
+                const completedLogs = [];
+                (allLogsRes?.data || []).forEach(l => {
+                    if (l && (l.status === 'Selesai' || l.status === 'Sudah Selesai')) {
+                        const uKey = String(l.username || l.user_id || l.full_name || '').trim().toLowerCase();
+                        if (uKey && !completedUserKeys.has(uKey)) {
+                            completedUserKeys.add(uKey);
+                            completedLogs.push(l);
+                        }
+                    }
+                });
+
+                const completedCount = completedUserKeys.size;
                 const percentage = Math.min(100, Math.round((completedCount / totalAssigned) * 100));
                 const isAllCompleted = completedCount >= totalAssigned;
                 const newStatus = isAllCompleted ? 'Selesai' : 'Belum Selesai';
@@ -5760,6 +5781,24 @@
             } catch (err) {
                 console.error('[Adapter submitSopExecutionLog error]', err);
                 return { success: false, message: 'Gagal mencatat log SOP: ' + err.message };
+            }
+        },
+
+        // REVISI V7.1.0: Handler untuk mengambil log spesifik SOP untuk Modal Rincian Multi-User
+        getSopLogsBySopId: async function(sopId, tgl, currentUser) {
+            const sb = getClient();
+            if (!sb || !sopId) return { success: false, data: [] };
+            try {
+                let query = sb.from('sop_execution_logs').select('*').eq('sop_id', sopId);
+                if (tgl) {
+                    query = query.eq('task_date', tgl);
+                }
+                const { data, error } = await query.order('completed_at', { ascending: false });
+                if (error) throw error;
+                return { success: true, data: data || [] };
+            } catch (err) {
+                console.warn('[Adapter getSopLogsBySopId error]', err);
+                return { success: false, data: [] };
             }
         },
 

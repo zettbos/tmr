@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=7.0.0"></script>
+    <script src="./supabase-gas-adapter.js?v=7.1.0"></script>
 
 </head>
 
@@ -50078,13 +50078,74 @@
                     Terima kasih telah menjalankan <span id="sopSuccessModalJudul" class="text-blue-600 font-bold">SOP</span> dengan disiplin.
                 </p>
             </div>
-            <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[11px] font-bold text-emerald-800">
+            <div id="sopSuccessModalStatusBox" class="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[11px] font-bold text-emerald-800">
                 Status & bukti foto tersimpan ke database.
             </div>
             <button type="button" onclick="closeSopSuccessModal()"
                 class="w-full py-2.5 bg-[#0066ff] hover:bg-blue-600 text-white font-black text-xs rounded-xl shadow-md shadow-blue-500/20 active:scale-95 transition cursor-pointer">
                 KEMBALI KE BERANDA
             </button>
+        </div>
+    </div>
+
+    <!-- REVISI V7.1.0: MODAL RINCIAN PENYELESAIAN MULTI-USER (SESUAI PERMINTAAN KLIEN AMIR) -->
+    <div id="modalSopUserCompletionBreakdown" onclick="if (event.target === this) closeSopUserCompletionBreakdownModal()"
+        class="fixed inset-0 z-[280] bg-slate-950/80 backdrop-blur-xs hidden flex items-center justify-center p-3 select-none" style="display: none; z-index: 999999;">
+        <div class="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] animate-scale-up" onclick="event.stopPropagation()">
+            <!-- Header Modal -->
+            <div class="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                <div class="flex items-center space-x-2.5 min-w-0 pr-2">
+                    <div class="w-9 h-9 rounded-xl bg-blue-600/30 text-blue-400 border border-blue-500/30 flex items-center justify-center text-sm shrink-0">
+                        <i class="fa-solid fa-users-viewfinder"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <h3 class="text-sm font-black text-white truncate" id="sopBreakdownModalTitle">Rincian Penyelesaian SOP</h3>
+                        <p class="text-[10px] text-slate-400 font-semibold truncate" id="sopBreakdownModalSubtitle">Memuat informasi user...</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeSopUserCompletionBreakdownModal()" class="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center text-sm transition cursor-pointer shrink-0">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Ringkasan Progres Visual -->
+            <div class="p-4 bg-slate-50 border-b border-slate-200 shrink-0">
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                        <i class="fa-solid fa-chart-pie text-blue-600"></i> Total Progres Hari Ini
+                    </span>
+                    <span class="text-xs font-black text-blue-600" id="sopBreakdownProgressText">0/0 User (0%)</span>
+                </div>
+                <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div id="sopBreakdownProgressBar" class="h-full bg-blue-600 rounded-full transition-all duration-300" style="width: 0%;"></div>
+                </div>
+                <div class="mt-2.5 flex items-center justify-between text-[10px]">
+                    <span id="sopBreakdownStatusBadge" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                        <i class="fa-solid fa-clock"></i> Belum Selesai
+                    </span>
+                    <button type="button" onclick="refreshSopUserCompletionBreakdown()" class="inline-flex items-center gap-1 text-slate-500 hover:text-blue-600 font-bold cursor-pointer transition">
+                        <i class="fa-solid fa-arrows-rotate text-[10px]" id="sopBreakdownRefreshIcon"></i> Muat Ulang Status
+                    </button>
+                </div>
+            </div>
+
+            <!-- Daftar User yang Ditugaskan (Scrollable) -->
+            <div class="p-4 overflow-y-auto space-y-2.5 flex-1 min-h-[160px]" id="sopBreakdownUsersList">
+                <div class="py-8 text-center text-slate-400 text-xs">
+                    <i class="fa-solid fa-spinner fa-spin mr-1"></i> Memuat status staf pelaksana...
+                </div>
+            </div>
+
+            <!-- Footer Modal -->
+            <div class="p-3 bg-white border-t border-slate-100 flex items-center justify-between shrink-0">
+                <p class="text-[10px] text-slate-400 font-medium">
+                    <i class="fa-solid fa-circle-check text-emerald-500 mr-0.5"></i> Data realtime sinkron dengan database server.
+                </p>
+                <button type="button" onclick="closeSopUserCompletionBreakdownModal()"
+                    class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl transition cursor-pointer">
+                    Tutup
+                </button>
+            </div>
         </div>
     </div>
 
@@ -51652,7 +51713,7 @@
         const curUId = String(user?.id_user || user?.id || user?.user_id || '').toLowerCase().trim();
         const curUName = String(user?.nama || user?.name || user?.username || '').toLowerCase().trim();
 
-        // 1. Ekstrak target user yang ditugaskan
+        // 1. Ekstrak target user yang ditugaskan (REVISI V7.1.0: Resolusi Target Unik Anti-Duplikasi Alias)
         let targetCount = 1;
         let targetIdentities = [];
         let isSpecific = false;
@@ -51668,7 +51729,7 @@
             listUse.forEach(u => {
                 const uid = String(u.id || u.user_id || u.id_user || '').toLowerCase().trim();
                 const unama = String(u.nama || u.name || u.username || '').toLowerCase().trim();
-                targetIdentities.push({ id: uid, nama: unama });
+                targetIdentities.push({ id: uid, nama: unama, raw: u });
             });
             isSpecific = true;
         } else {
@@ -51679,10 +51740,23 @@
 
             if (tUsers && tUsers.length > 0 && !tUsers.includes('ALL') && !tUsers.includes('Semua User')) {
                 const distinctCodes = tUsers.filter(u => typeof u === 'string' && u.toUpperCase().startsWith('USR-'));
-                targetCount = distinctCodes.length > 0 ? distinctCodes.length : tUsers.length;
-                tUsers.forEach(u => {
-                    targetIdentities.push({ id: '', nama: String(u).toLowerCase().trim() });
-                });
+                if (distinctCodes.length > 0) {
+                    targetCount = distinctCodes.length;
+                    const allAppUsers = (typeof getCleanActiveAppUsers === 'function') ? getCleanActiveAppUsers(false) : [];
+                    distinctCodes.forEach(code => {
+                        const foundU = allAppUsers.find(au => au && (au.id_user === code || au.id === code));
+                        targetIdentities.push({
+                            id: code.toLowerCase(),
+                            nama: (foundU ? (foundU.nama || foundU.username) : code).toLowerCase(),
+                            raw: foundU || { id_user: code, nama: code }
+                        });
+                    });
+                } else {
+                    targetCount = tUsers.length;
+                    tUsers.forEach(u => {
+                        targetIdentities.push({ id: '', nama: String(u).toLowerCase().trim(), raw: u });
+                    });
+                }
                 isSpecific = true;
             }
         }
@@ -51758,7 +51832,7 @@
                 completedUserLogs.forEach(c => {
                     if (isTargetUserMatchLog_(t, c)) {
                         hasMatched = true;
-                        const nm = t.nama || c.nama;
+                        const nm = (t.raw && t.raw.nama) || t.nama || c.nama;
                         if (nm && !completedByList.includes(nm)) completedByList.push(nm);
                     }
                 });
@@ -51809,6 +51883,7 @@
             isAllCompleted: isAllCompleted,
             isUserCompleted: isUserCompleted,
             completed_by: completedByList,
+            target_people: targetIdentities, // REVISI V7.1.0: Kirim target orang unik untuk modal rincian
             date_key: todayKey
         };
     }
@@ -51991,7 +52066,7 @@
                     ? window.getSopMultiUserProgress(item, u, todayKey)
                     : (item.multi_user_progress || { totalAssigned: 1, completedCount: 0, percentage: 0, isAllCompleted: false, isUserCompleted: false }));
             const progressKeterangan = (progress.totalAssigned > 1)
-                ? ' • <span class="font-bold text-blue-600">Penyelesaian: ' + progress.completedCount + '/' + progress.totalAssigned + ' User (' + progress.percentage + '%)</span>'
+                ? ' • <button type="button" onclick="event.stopPropagation(); openSopUserCompletionBreakdownModal(\'' + safeId + '\')" class="inline-flex items-center gap-1 font-bold text-blue-600 hover:text-blue-800 underline decoration-blue-300 underline-offset-2 cursor-pointer transition">Penyelesaian: ' + progress.completedCount + '/' + progress.totalAssigned + ' User (' + progress.percentage + '%) <i class="fa-solid fa-circle-info text-[8px]"></i></button>'
                 : '';
 
             row.innerHTML = 
@@ -52816,11 +52891,14 @@
                     : (sop.multi_user_progress || { totalAssigned: 1, completedCount: 0, percentage: 0, isAllCompleted: false, isUserCompleted: false }));
             const progressBadgeHtml = (progress.totalAssigned > 1)
                 ? ('<div class="flex items-center gap-1.5 pt-0.5">' +
-                   '    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-bold ' + 
-                        (progress.isAllCompleted ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-blue-50 text-blue-700 border border-blue-200') + '">' +
+                   '    <button type="button" onclick="event.stopPropagation(); openSopUserCompletionBreakdownModal(\'' + safeId + '\')" ' +
+                   '        title="Klik untuk melihat rincian user yang sudah & belum selesai" ' +
+                   '        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-bold cursor-pointer transition hover:shadow-xs active:scale-95 ' + 
+                        (progress.isAllCompleted ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300' : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-300') + '">' +
                    '        <i class="fa-solid fa-users text-[8.5px]"></i>' +
-                   '        Penyelesaian: ' + progress.completedCount + '/' + progress.totalAssigned + ' User (' + progress.percentage + '%)' +
-                   '    </span>' +
+                   '        <span>Penyelesaian: ' + progress.completedCount + '/' + progress.totalAssigned + ' User (' + progress.percentage + '%)</span>' +
+                   '        <i class="fa-solid fa-circle-info text-[8px] opacity-75"></i>' +
+                   '    </button>' +
                    (progress.isUserCompleted && !progress.isAllCompleted
                        ? '    <span class="text-[9px] font-bold text-emerald-600 bg-emerald-50/80 px-1.5 py-0.5 rounded border border-emerald-100 flex items-center gap-0.5"><i class="fa-solid fa-check text-[8px]"></i> Anda Selesai</span>'
                        : (!progress.isUserCompleted && !isAdmin
@@ -60065,9 +60143,11 @@
 
             // Submit log to backend
             try {
+                const todayKey = (typeof getTodayWitaDateKey === 'function') ? getTodayWitaDateKey() : 'today';
                 const payload = {
                     id_sop: idSop,
                     judul_sop: judulSop,
+                    tanggal: todayKey, // REVISI V7.1.0: Kirim tanggal WITA lokal secara eksplisit
                     user_id: String(activeUser?.id_user || activeUser?.id || activeUser?.user_id || 'USR-001').trim(),
                     user_nama: String(activeUser?.nama || activeUser?.nama_lengkap || activeUser?.username || 'User Pelaksana').trim(),
                     user_role: String(activeUser?.role || activeUser?.jabatan || 'Admin').trim(),
@@ -60129,7 +60209,26 @@
             }
             modal.style.zIndex = '999999';
             const elJudul = document.getElementById('sopSuccessModalJudul');
-            if (elJudul) elJudul.innerText = judulSop;
+            if (elJudul) {
+                const uNm = activeUser?.nama || activeUser?.username || 'Anda';
+                elJudul.innerHTML = escapeHtml(judulSop) + '<br><span class="text-xs text-slate-600 font-semibold mt-1 block">Pelaksana: <b class="text-slate-900">' + escapeHtml(uNm) + '</b></span>';
+            }
+            const elBox = document.getElementById('sopSuccessModalStatusBox');
+            if (elBox) {
+                const todayKey = (typeof getTodayWitaDateKey === 'function') ? getTodayWitaDateKey() : 'today';
+                const curProg = (typeof getSopMultiUserProgress === 'function') ? getSopMultiUserProgress(sopObj, activeUser, todayKey) : null;
+                const isFinal = curProg ? curProg.isAllCompleted : (sopObj && sopObj.status === 'Selesai');
+                if (isFinal) {
+                    elBox.className = 'bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[11px] font-bold text-emerald-800 space-y-0.5';
+                    elBox.innerHTML = '<div>🎉 Seluruh user telah selesai (100%)!</div><div class="text-[10px] text-emerald-600 font-medium">SOP otomatis berpindah ke folder SELESAI.</div>';
+                } else {
+                    const doneC = curProg ? curProg.completedCount : 1;
+                    const totA = curProg ? curProg.totalAssigned : 1;
+                    const pctVal = curProg ? curProg.percentage : 100;
+                    elBox.className = 'bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-[11px] font-bold text-blue-800 space-y-0.5';
+                    elBox.innerHTML = '<div>Progres: ' + doneC + '/' + totA + ' User (' + pctVal + '%) Selesai.</div><div class="text-[10px] text-blue-600 font-medium">Menunggu user lainnya menyelesaikan.</div>';
+                }
+            }
             modal.classList.remove('hidden');
             modal.style.display = 'flex';
         }
@@ -60175,6 +60274,303 @@
         }
     }
     window.closeSopSuccessModal = closeSopSuccessModal;
+
+    // =========================================================================
+    // REVISI V7.1.0: MODAL RINCIAN PENYELESAIAN MULTI-USER (SESUAI PERMINTAAN KLIEN AMIR)
+    // =========================================================================
+    window._activeBreakdownSopId = null;
+
+    function openSopUserCompletionBreakdownModal(sopId) {
+        if (!sopId) return;
+        window._activeBreakdownSopId = sopId;
+
+        const modal = document.getElementById('modalSopUserCompletionBreakdown');
+        if (!modal) return;
+
+        if (modal.parentElement !== document.body) {
+            document.body.appendChild(modal);
+        }
+        modal.style.zIndex = '999999';
+
+        // 1. Cari data SOP
+        const sop = (window._sopMasterDataCache || []).find(s => s && String(s.id_sop || s.id || '').trim().toLowerCase() === String(sopId).trim().toLowerCase()) || null;
+        const titleEl = document.getElementById('sopBreakdownModalTitle');
+        const subtitleEl = document.getElementById('sopBreakdownModalSubtitle');
+        const listContainer = document.getElementById('sopBreakdownUsersList');
+
+        if (sop) {
+            if (titleEl) titleEl.innerText = sop.judul_sop || 'Rincian Penyelesaian SOP';
+            if (subtitleEl) subtitleEl.innerText = (sop.kategori || 'SOP') + ' • ' + (typeof formatSopCardKeterangan === 'function' ? formatSopCardKeterangan(sop) : 'Jadwal Hari Ini');
+        } else {
+            if (titleEl) titleEl.innerText = 'Rincian Penyelesaian SOP';
+            if (subtitleEl) subtitleEl.innerText = 'ID: ' + sopId;
+        }
+
+        // Tampilkan modal
+        modal.classList.remove('hidden');
+        modal.style.display = 'flex';
+
+        // Tampilkan skeleton / loading state pada list
+        if (listContainer) {
+            listContainer.innerHTML = 
+                '<div class="py-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center space-y-2">' +
+                '    <div class="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>' +
+                '    <span>Mengambil status pengerjaan seluruh staf dari server...</span>' +
+                '</div>';
+        }
+
+        // 2. Muat log penyelesaian SOP dari backend / cache
+        loadAndRenderSopBreakdownData(sopId);
+    }
+    window.openSopUserCompletionBreakdownModal = openSopUserCompletionBreakdownModal;
+
+    function closeSopUserCompletionBreakdownModal() {
+        const modal = document.getElementById('modalSopUserCompletionBreakdown');
+        if (modal) {
+            modal.classList.add('hidden');
+            modal.style.display = 'none';
+        }
+        window._activeBreakdownSopId = null;
+    }
+    window.closeSopUserCompletionBreakdownModal = closeSopUserCompletionBreakdownModal;
+
+    function refreshSopUserCompletionBreakdown() {
+        if (!window._activeBreakdownSopId) return;
+        const icon = document.getElementById('sopBreakdownRefreshIcon');
+        if (icon) icon.classList.add('animate-spin');
+        loadAndRenderSopBreakdownData(window._activeBreakdownSopId, function() {
+            if (icon) icon.classList.remove('animate-spin');
+        });
+    }
+    window.refreshSopUserCompletionBreakdown = refreshSopUserCompletionBreakdown;
+
+    function loadAndRenderSopBreakdownData(sopId, onComplete) {
+        const sop = (window._sopMasterDataCache || []).find(s => s && String(s.id_sop || s.id || '').trim().toLowerCase() === String(sopId).trim().toLowerCase()) || null;
+        const todayKey = (typeof getTodayWitaDateKey === 'function') ? getTodayWitaDateKey() : 'today';
+
+        // Coba panggil backend langsung via adapter jika tersedia
+        if (typeof google !== 'undefined' && google.script && google.script.run && typeof google.script.run.getSopLogsBySopId === 'function') {
+            google.script.run
+                .withSuccessHandler(function(res) {
+                    const logs = (res && res.success && Array.isArray(res.data)) ? res.data : (window._sopReportDataCache || []);
+                    renderSopUserBreakdownList(sop, logs, todayKey);
+                    if (typeof onComplete === 'function') onComplete();
+                })
+                .withFailureHandler(function(err) {
+                    console.warn('getSopLogsBySopId fallback to cache:', err);
+                    renderSopUserBreakdownList(sop, window._sopReportDataCache || [], todayKey);
+                    if (typeof onComplete === 'function') onComplete();
+                })
+                .getSopLogsBySopId(sopId, todayKey);
+        } else if (typeof google !== 'undefined' && google.script && google.script.run && typeof google.script.run.getSopReportData === 'function') {
+            google.script.run
+                .withSuccessHandler(function(res) {
+                    const logs = (res && res.success && Array.isArray(res.data)) ? res.data : (window._sopReportDataCache || []);
+                    if (res && res.success && Array.isArray(res.data)) {
+                        window._sopReportDataCache = res.data;
+                    }
+                    renderSopUserBreakdownList(sop, logs, todayKey);
+                    if (typeof onComplete === 'function') onComplete();
+                })
+                .withFailureHandler(function(err) {
+                    renderSopUserBreakdownList(sop, window._sopReportDataCache || [], todayKey);
+                    if (typeof onComplete === 'function') onComplete();
+                })
+                .getSopReportData({ status: 'semua' });
+        } else {
+            renderSopUserBreakdownList(sop, window._sopReportDataCache || [], todayKey);
+            if (typeof onComplete === 'function') onComplete();
+        }
+    }
+
+    function renderSopUserBreakdownList(sop, logs, todayKey) {
+        const listContainer = document.getElementById('sopBreakdownUsersList');
+        const progressTextEl = document.getElementById('sopBreakdownProgressText');
+        const progressBarEl = document.getElementById('sopBreakdownProgressBar');
+        const statusBadgeEl = document.getElementById('sopBreakdownStatusBadge');
+        if (!listContainer) return;
+
+        if (!todayKey) todayKey = (typeof getTodayWitaDateKey === 'function') ? getTodayWitaDateKey() : 'today';
+        const sopId = sop ? (sop.id_sop || sop.id) : (window._activeBreakdownSopId || '');
+
+        // 1. Dapatkan daftar master user aplikasi
+        const allAppUsers = (typeof getCleanActiveAppUsers === 'function') ? getCleanActiveAppUsers(false) : [
+            { id_user: 'USR-001', nama: 'Admin Toko Tamara', username: 'admin', role: 'Admin' },
+            { id_user: 'USR-002', nama: 'TAMARA BANGUNAN', username: 'staff2', role: 'Staff Toko' },
+            { id_user: 'USR-003', nama: 'STAFF PENGECEKAN', username: 'checker', role: 'Petugas Pengecek' },
+            { id_user: 'USR-004', nama: '01 PENGANTARAN', username: 'driver1', role: 'Sopir' },
+            { id_user: 'USR-005', nama: '02 PENGANTARAN', username: 'driver2', role: 'Sopir' }
+        ];
+
+        // 2. Ekstrak target user unik yang ditugaskan
+        let targetPeople = [];
+        const pUsers = (sop && Array.isArray(sop.penerima_users) && sop.penerima_users.length > 0)
+            ? sop.penerima_users
+            : (sop && sop.jadwal && Array.isArray(sop.jadwal.penerima_users) ? sop.jadwal.penerima_users : null);
+
+        if (pUsers && Array.isArray(pUsers) && pUsers.length > 0) {
+            const sel = pUsers.filter(u => u && (u.selected === true || u.selected === 'true' || u.selected === 1));
+            const listUse = sel.length > 0 ? sel : pUsers;
+            listUse.forEach(u => {
+                const uId = String(u.id_user || u.id || u.user_id || '').trim();
+                const uNm = String(u.nama || u.name || u.username || uId).trim();
+                const uRole = String(u.role || u.jabatan || 'Staff').trim();
+                targetPeople.push({ id: uId, nama: uNm, username: u.username || '', role: uRole });
+            });
+        } else {
+            const tUsers = (sop && Array.isArray(sop.target_users) && sop.target_users.length > 0)
+                ? sop.target_users
+                : (sop && sop.jadwal && Array.isArray(sop.jadwal.target_users) ? sop.jadwal.target_users : []);
+
+            const distinctCodes = tUsers.filter(u => typeof u === 'string' && u.toUpperCase().startsWith('USR-'));
+            if (distinctCodes.length > 0) {
+                distinctCodes.forEach(code => {
+                    const foundU = allAppUsers.find(au => au && (au.id_user === code || au.id === code));
+                    targetPeople.push({
+                        id: code,
+                        nama: foundU ? (foundU.nama || foundU.username) : code,
+                        username: foundU ? foundU.username : '',
+                        role: foundU ? foundU.role : 'Staff'
+                    });
+                });
+            } else if (tUsers.length > 0) {
+                tUsers.forEach(u => {
+                    targetPeople.push({ id: '', nama: String(u).trim(), username: '', role: 'Staff' });
+                });
+            }
+        }
+
+        if (targetPeople.length === 0) {
+            targetPeople.push({ id: 'ALL', nama: 'Semua Staf Terkait', username: '', role: 'Tim Operasional' });
+        }
+
+        // 3. Filter log penyelesaian SOP untuk hari ini
+        const relevantLogs = (Array.isArray(logs) ? logs : []).filter(l => {
+            if (!l) return false;
+            const logSopId = String(l.sop_id || l.id_sop || '').trim().toLowerCase();
+            if (sopId && logSopId && logSopId !== String(sopId).trim().toLowerCase()) return false;
+            const st = String(l.status || l.status_eksekusi || l.status_selesai || '').toLowerCase().trim();
+            if (st !== 'selesai' && st !== 'sudah selesai') return false;
+            const lTgl = String(l.task_date || l.tanggal || l.completed_at || '').toLowerCase().trim();
+            if (todayKey && !lTgl.includes(todayKey)) return false;
+            return true;
+        });
+
+        // 4. Cocokkan tiap target user terhadap log
+        let completedCount = 0;
+        const totalAssigned = targetPeople.length;
+        const renderedItemsHtml = [];
+
+        targetPeople.forEach(person => {
+            const matchedLog = relevantLogs.find(l => {
+                const lId = String(l.user_id || l.username || '').toLowerCase().trim();
+                const lNm = String(l.full_name || l.user_nama || l.nama || '').toLowerCase().trim();
+                return isTargetUserMatchLog_(person, { id: lId, nama: lNm });
+            });
+
+            const activeUser = (typeof getCurrentAppUser === 'function') ? getCurrentAppUser() : (window.currentUser || null);
+            const isSelf = activeUser && isTargetUserMatchLog_(person, {
+                id: String(activeUser.id_user || activeUser.id || '').toLowerCase().trim(),
+                nama: String(activeUser.nama || activeUser.username || '').toLowerCase().trim()
+            });
+            const isDoneLocal = isSelf && (typeof isSopCompletedTodayByUser === 'function') && isSopCompletedTodayByUser(sopId, activeUser, todayKey);
+
+            const isDone = Boolean(matchedLog || isDoneLocal);
+            if (isDone) completedCount++;
+
+            let completedTimeText = '-';
+            let photoUrl = '';
+            if (matchedLog) {
+                if (matchedLog.completed_at) {
+                    const mMatch = String(matchedLog.completed_at).match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+                    if (mMatch) {
+                        completedTimeText = mMatch[4] + ':' + mMatch[5] + ' WITA';
+                    } else {
+                        completedTimeText = 'Hari ini';
+                    }
+                }
+                let photos = matchedLog.proof_photo_urls || matchedLog.foto_bukti;
+                if (typeof photos === 'string') {
+                    try { photos = JSON.parse(photos); } catch(e) { photos = [photos]; }
+                }
+                if (Array.isArray(photos) && photos.length > 0 && photos[0]) {
+                    photoUrl = typeof convertDriveUrlToDirectImage === 'function' ? convertDriveUrlToDirectImage(photos[0]) : photos[0];
+                }
+            } else if (isDoneLocal) {
+                completedTimeText = 'Baru saja';
+            }
+
+            const initials = (person.nama || 'U').split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+
+            renderedItemsHtml.push(
+                '<div class="flex items-center justify-between p-3 rounded-2xl border transition ' + 
+                    (isDone ? 'bg-emerald-50/70 border-emerald-200 shadow-2xs' : 'bg-slate-50 border-slate-200/80') + '">' +
+                '    <div class="flex items-center space-x-3 min-w-0 pr-2">' +
+                '        <div class="w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs shrink-0 shadow-2xs ' +
+                            (isDone ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600') + '">' +
+                            (isDone ? '<i class="fa-solid fa-check text-sm"></i>' : escapeHtml(initials)) +
+                '        </div>' +
+                '        <div class="min-w-0">' +
+                '            <div class="flex items-center space-x-1.5">' +
+                '                <span class="text-xs font-black text-slate-900 truncate block">' + escapeHtml(person.nama) + '</span>' +
+                (isSelf ? '      <span class="px-1.5 py-0.2 rounded text-[8.5px] font-black bg-blue-100 text-blue-700 shrink-0">Anda</span>' : '') +
+                '            </div>' +
+                '            <div class="flex items-center space-x-1.5 text-[10px] font-semibold text-slate-500 mt-0.5">' +
+                '                <span class="text-slate-600 font-bold">' + escapeHtml(person.role || 'Staff') + '</span>' +
+                (person.username ? (' • <span class="text-slate-400">@' + escapeHtml(person.username) + '</span>') : '') +
+                '            </div>' +
+                '        </div>' +
+                '    </div>' +
+                '    <div class="flex flex-col items-end shrink-0 space-y-1">' +
+                (isDone 
+                    ? ('        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">' +
+                       '            <i class="fa-solid fa-circle-check text-emerald-600 text-[9px]"></i> Selesai' +
+                       '        </span>' +
+                       '        <span class="text-[9px] font-semibold text-slate-400">' + completedTimeText + '</span>' +
+                       (photoUrl 
+                           ? ('<button type="button" onclick="previewBreakdownPhoto(\'' + escapeHtml(photoUrl) + '\', \'' + escapeHtml(person.nama).replace(/'/g, "\\'") + '\')" class="text-[9px] font-bold text-blue-600 hover:text-blue-800 underline flex items-center gap-0.5 cursor-pointer mt-0.5"><i class="fa-solid fa-image text-[8px]"></i> Lihat Foto</button>')
+                           : ''))
+                    : ('        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">' +
+                       '            <i class="fa-solid fa-clock text-amber-500 text-[9px]"></i> Belum Selesai' +
+                       '        </span>' +
+                       '        <span class="text-[9px] font-medium text-amber-600/80">Menunggu</span>')) +
+                '    </div>' +
+                '</div>'
+            );
+        });
+
+        listContainer.innerHTML = renderedItemsHtml.join('');
+
+        // 5. Update visual progress bar di modal
+        const pct = totalAssigned > 0 ? Math.min(100, Math.round((completedCount / totalAssigned) * 100)) : 0;
+        const isAll = (completedCount >= totalAssigned && totalAssigned > 0);
+
+        if (progressTextEl) progressTextEl.innerText = completedCount + '/' + totalAssigned + ' User (' + pct + '%)';
+        if (progressBarEl) {
+            progressBarEl.style.width = pct + '%';
+            progressBarEl.className = 'h-full rounded-full transition-all duration-300 ' + (isAll ? 'bg-emerald-500' : 'bg-blue-600');
+        }
+        if (statusBadgeEl) {
+            if (isAll) {
+                statusBadgeEl.className = 'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200';
+                statusBadgeEl.innerHTML = '<i class="fa-solid fa-circle-check"></i> Selesai 100% (Semua User Selesai)';
+            } else {
+                statusBadgeEl.className = 'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-bold bg-amber-50 text-amber-700 border border-amber-200';
+                statusBadgeEl.innerHTML = '<i class="fa-solid fa-clock"></i> Belum Selesai (Menunggu ' + (totalAssigned - completedCount) + ' User)';
+            }
+        }
+    }
+    window.renderSopUserBreakdownList = renderSopUserBreakdownList;
+
+    function previewBreakdownPhoto(url, nama) {
+        if (!url) return;
+        if (typeof openPreviewMediaContohModal === 'function') {
+            openPreviewMediaContohModal(url, 'foto', 'Bukti Foto: ' + (nama || 'Staf'));
+        } else {
+            window.open(url, '_blank');
+        }
+    }
+    window.previewBreakdownPhoto = previewBreakdownPhoto;
 
     /**
      * =========================================================================

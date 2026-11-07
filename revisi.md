@@ -1,197 +1,182 @@
-# DRAF RENCANA REVISI AKTIF (v7.0.0)
-## INVESTIGASI AKAR MASALAH NOTIFIKASI MULTI-USER SOP, ISOLASI RESIDU CACHE LOKAL ANTAR-AKUN, PERBAIKAN FOLDER "TERJADWAL" KE "BELUM SELESAI", DAN PANDUAN PENGUJIAN KLIEN AMIR
+# DRAF RENCANA REVISI AKTIF (v7.1.0)
+## INVESTIGASI AKAR MASALAH STATUS PENYELESAIAN USER KE-3, AUDIT DATABASE SUPABASE, DAN DESAIN FITUR POP-UP RINCIAN STATUS PENYELESAIAN MULTI-USER
 
 > **STATUS DOKUMEN:** SELESAI DITERAPKAN 100% KE PRODUKSI LIVE (VERIFIED & AUDITED).  
 > **ATURAN MUTLAK:** Berkas ini adalah runtime draft revisi aktif yang di-replace 100% dari baris pertama setiap ada sesi revisi baru. Riwayat revisi lama yang telah selesai dan tervalidasi tersimpan secara permanen di zona bawah berkas `prd.md`.
 
 ---
 
-## 1. PENJELASAN & KLARIFIKASI: "INI YANG SALAH GW APA KLIEN YA?"
+## 1. PENJELASAN & KLARIFIKASI: "SIAPA YANG SALAH, KITA APA KLIEN?"
 
-Berdasarkan analisis log percakapan WhatsApp, tangkapan layar iPhone klien Amir, dan inspeksi mendalam pada basis data Supabase:
+Berdasarkan pesan WhatsApp klien Amir pada tangkapan layar terbaru (`media_1794049569340_aa01b3c8.png`):
+> *"Mas ini sudah berhasil pindah ke folder belum selesai*  
+> *Tapi kenapa saat user ke3 sudah selesaikan*  
+> *Statusnya tidak update dan tidak pindah ke folder selesai*  
+> *Sama kalau bisa kolom keterangan penyelesaian di klik menampilkan menu pop up yang bisa kita tahu user mana yang sudah kerjakan sopnya. Dan user Yang mana yang belum kerjakan sopnya"*
 
-**Jawabannya: Ini adalah KOMBINASI antara metode pengujian klien yang tidak merefleksikan operasional lapangan nyata, dan KELEMAHAN SISTEM APLIKASI KITA dalam menangani pergantian akun beruntun pada satu perangkat/peramban (*Single-Device Multi-Account Switching*).**
+Dan berdasarkan hasil audit langsung ke basis data produksi **Supabase PostgreSQL**:
 
-Berikut perincian adil dan transparan dari kedua sisi:
+### JAWABAN SINGKAT:
+**Ini adalah KOMBINASI antara User 3 yang memang BELUM TERCATAT di server database (sisi pengujian klien), dan KETIADAAN TRANSPARANSI UI pada sistem kita (sisi aplikasi kita).**
 
-### A. Dari Sisi Klien (Amir) — Cara Pengujian yang Berbeda dengan Operasional Lapangan:
-1. **Pengujian 3 Akun Beruntun di 1 HP yang Sama:**  
-   Amir menguji fitur multi-user dengan skenario:  
-   - Login Akun 1 (`pengantaran 1`) di HP miliknya pada 17.33 -> Notif muncul di 17.35 -> Dikerjakan sampai selesai.  
-   - Logout Akun 1 -> Langsung Login Akun 2 (`pengantaran 2` atau `staff 2`) di HP yang sama pada 17.37 -> Menunggu notifikasi muncul.  
-2. **Kondisi Riil Operasional di Lapangan:**  
-   Di dunia kerja nyata:
-   - Sopir 1 memegang HP fisiknya sendiri di Truk A.
-   - Sopir 2 memegang HP fisiknya sendiri di Truk B.
-   - Staff Toko memegang HP fisiknya sendiri di Meja Toko.  
-   Masing-masing karyawan tetap dalam keadaan login di HP masing-masing, sehingga alarm notifikasi jam 17.35 akan berdering serentak di ketiga HP fisik tersebut.
-3. **Mengapa Cara Klien Tetap Wajar?**  
-   Meskipun tidak mencerminkan operasional sopir, **cara pengujian yang dilakukan Amir adalah hal yang sangat wajar bagi seorang Owner / Klien**. Seorang pemilik bisnis tentu ingin memastikan sistemnya berjalan sebelum menyerahkan akun ke karyawannya tanpa harus meminjam 3 unit HP fisik sekaligus.
+Berikut perincian adil, jujur, dan berbasis data dari kedua sisi:
 
 ---
 
-### B. Dari Sisi Sistem / Kita (Bug Kode Aplikasi Kita):
-Meskipun Amir menguji di 1 HP fisik yang sama, **aplikasi web kita seharusnya tangguh (*resilient*) dan mampu mengisolasi data masing-masing akun secara bersih tanpa kebocoran residu cache**.  
-Faktanya, ada **4 Cacat Teknis (Technical Flaws)** nyata di kode aplikasi kita:
-
-1. **Local Cache Pollution (`is_user_completed: true` bocor ke akun lain):**  
-   Saat `pengantaran 1` menyelesaikan SOP, fungsi `finishSopExecution` (baris 60038) menuliskan properti `is_user_completed: true` langsung ke dalam objek SOP di `localStorage` (`tb_sop_master_data_cache`).  
-   Ketika Amir logout dan login sebagai `pengantaran 2` atau `staff 2`, browser membaca cache SOP tersebut. Fungsi `getSopMultiUserProgress` (baris 51716) melihat `is_user_completed: true`. Akibatnya, `pengantaran 2` dan `staff 2` **langsung dianggap oleh sistem sudah menyelesaikan SOP tersebut hari ini**! Di kartu SOP bahkan muncul badge hijau *"Anda Selesai"*. Karena sudah dianggap selesai, alarm notifikasi otomatis dicegah muncul!
-2. **Residu Debounce Global Tanpa User Scope (`tb_sop_last_pop_` & `_activeSopNotificationData`):**  
-   Pada baris 60882 dan 63690, debounce dicatat dengan kunci `tb_sop_last_pop_` + idSop tanpa menyertakan identitas user. Selain itu, variabel memori `window._activeSopNotificationData` tidak pernah di-reset menjadi `null` saat logout atau saat eksekusi selesai, sehingga guard baris 60914 menolak memicu notifikasi ulang untuk SOP yang sama.
-3. **Kartu SOP Terjebak di Folder "Terjadwal" padahal Sudah Dikerjakan 1/3 User (Screenshot 2 Amir):**  
-   Pada tangkapan layar iPhone Amir (jam 17.18), kartu menampilkan `Penyelesaian: 1/3 User (33%)`, namun status badge masih tertulis `Terjadwal` dan kartu masih berada di tab **"Terjadwal"** (belum berpindah ke folder **"Belum Selesai"**).  
-   Penyebabnya di `getEffectiveSopStatus` (baris 51900): sistem mengecek `sop._adminManualStatus === 'terjadwal'` sebelum mengecek progres pengerjaan `progress.completedCount > 0`. Akibatnya, status terkunci di `Terjadwal` dan kartu tidak mau berpindah folder.
-4. **Window Keterlambatan Login (Late-Login Overdue Catch-Up):**  
-   Jadwal SOP disetel jam **17.35 WITA**. Amir baru login akun kedua pada jam **17.37 WITA** (terlambat 2 menit).  
-   Sistem kita saat ini hanya mengevaluasi slot yang jatuh tempo tetapi belum memiliki penanganan agresif untuk *late-login*: jika seorang staf baru membuka/login aplikasi setelah jam jatuh tempo terlewati dan ia belum menyelesaikan tugasnya hari ini, sistem **WAJIB langsung memunculkan alarm popup pengingat seketika** (*overdue catch-up*).
-
----
-
-## 2. HASIL AUDIT TEKNIS & BUKTI VALIDASI DATABASE SUPABASE
-
-Audit langsung ke basis data produksi Supabase (`https://eagplukqotycpslhvnbp.supabase.co`) mengonfirmasi temuan berikut:
-
-1. **Tabel `sop_masters`:**  
-   - ID: `SOP-1794043247520`  
-   - Judul: *"Pengantaran Muatan Berat & Semen"*  
-   - Status di database: `'Belum Selesai'` (Server database sudah benar mencatat status ini).
-2. **Tabel `sop_targets` (`JADWAL-SOP-1794043247520`):**  
-   - Target Users memuat 3 kode staf unik:  
-     - `USR-002` (`staff2` / `TAMARA BANGUNAN`)  
-     - `USR-004` (`driver1` / `01 PENGANTARAN`)  
-     - `USR-005` (`driver2` / `02 PENGANTARAN`)  
-     Serta alias pelengkapnya.
-3. **Tabel `sop_execution_logs`:**  
-   - Ditemukan hanya 1 log penyelesaian:  
-     `id: LOG-1794043396950-427`, `username: USR-004`, `full_name: 01 PENGANTARAN`, `status: Selesai`, `completed_at: 2026-11-07 17:23:16 WITA`.  
-   - `USR-002` dan `USR-005` **BENAR-BENAR BELUM MENYELESAIKAN SOP INI DI SERVER**.  
-   - Ini membuktikan bahwa kegagalan notifikasi pada akun ke-2 murni akibat residu state lokal di browser HP Amir.
+### A. Dari Sisi Klien (Amir) — Faktanya Log User Ke-3 Memang Belum Masuk ke Database:
+1. **Bukti Validasi Nyata di Server Supabase:**  
+   Ketika kami memeriksa tabel `sop_execution_logs` di database Supabase secara *real-time*:
+   - ✅ **Log 1:** `LOG-1794043396950-427` — `01 PENGANTARAN` (`USR-004`), selesai jam **17:23:16 WITA**.
+   - ✅ **Log 2:** `LOG-1794048909658-115` — `02 PENGANTARAN` (`USR-005`), selesai jam **18:55:09 WITA**.
+   - ❌ **Log 3:** **KOSONG / TIDAK ADA!** Log untuk akun `staff2` (`USR-002` / `TAMARA BANGUNAN`) sama sekali **belum pernah tersimpan di database server**.
+2. **Mengapa Kartu Tidak Pindah ke Folder "Selesai"?**  
+   Karena di database baru tercatat 2 dari 3 user yang ditugaskan (**2/3 User = 67%**).  
+   Sistem di server dan aplikasi secara matematis **sudah benar** mempertahankan status `"Belum Selesai"`. Aturannya: kartu HANYA boleh pindah ke folder "Selesai" jika seluruh target user telah tuntas 100% (3/3 user).
+3. **Mengapa Amir Mengira Sudah Menyelesaikan User Ke-3?**  
+   Kemungkinan besar saat Amir login akun `staff2`:
+   - Amir baru menyelesaikan langkah 1 atau 2 dan menutup modal sebelum menekan tombol akhir *"KIRIM BUKTI & SELESAIKAN"* pada langkah terakhir.
+   - Atau ada checklist / konfirmasi baca yang belum tercentang sehingga tombol submit masih nonaktif (*disabled*).
+   - Atau terjadi kendala jaringan saat pengiriman dari Safari iPhone sehingga paket HTTP POST tidak sampai ke server Supabase.
 
 ---
 
-## 3. RANCANGAN SOLUSI PERBAIKAN ARSITEKTUR LENGKAP (v7.0.0)
-
-Untuk menyelesaikan masalah ini secara tuntas 100% dan membuat aplikasi kebal terhadap pengujian akun bergantian di satu perangkat:
-
----
-
-### Solusi 1: Isolasi Total Status Multi-User & Pembersihan Residu `is_user_completed`
-* **File Target:** `tb-delivery-pro/index.html` (Fungsi `getSopMultiUserProgress` baris ~51642 & `finishSopExecution` baris ~59980).
-* **Perubahan Kode:**  
-  1. Hapus penyimpanan flag global `is_user_completed: true` ke dalam properti objek `sop.multi_user_progress` di master cache.
-  2. Evaluasi status `isUserCompleted` di `getSopMultiUserProgress` **HANYA dihitung secara dinamis dan real-time** dengan mencocokkan identitas pengguna aktif saat ini (`currentUser.username`, `currentUser.id_user`, `currentUser.nama`) terhadap:
-     - Daftar array `completed_by` / log eksekusi hari ini.
-     - Kunci lokal ber-skop user: `localStorage.getItem('tb_sop_completed_' + idSop + '_' + userKey + '_' + todayKey)`.
-  3. DILARANG KERAS mengasumsikan `isUserCompleted = true` hanya karena ada properti `m.is_user_completed` di objek cache lama.
-
----
-
-### Solusi 2: Pembersihan Bersih Saat Logout (*Hard Teardown Session*)
-* **File Target:** `tb-delivery-pro/index.html` (Fungsi `handleLogoutDirect`, `clearPersistentAuthSession`, `closeModulSOP`).
-* **Perubahan Kode:**  
-  1. Reset total seluruh variabel state global memori:
-     ```javascript
-     window._activeSopNotificationData = null;
-     window._activeSopAckKey = null;
-     window._sopExecutionState = null;
-     window._serverCompletedSopIdsSet = new Set();
-     ```
-  2. Bersihkan `sessionStorage.clear()`.
-  3. Hapus seluruh kunci debounce dan ack slot yang berpotensi menahan trigger notifikasi:
-     - Hapus `tb_sop_last_pop_*`
-     - Hapus `tb_sop_ack_slot_*`
-  4. Bersihkan properti residu user-specific dari `window._sopMasterDataCache` sebelum pengguna baru login.
+### B. Dari Sisi Sistem / Kita (Kelemahan & Blindspot UX Aplikasi):
+Meskipun data server membuktikan user ke-3 belum masuk, **klien Amir sama sekali tidak bisa disalahkan atas kebingungan ini!**  
+Penyebabnya adalah **kelemahan desain antarmuka kita sendiri**:
+1. **Blindspot Informasi (*Black Box System*):**  
+   Kartu SOP kita saat ini hanya menampilkan tulisan statis: `Penyelesaian: 2/3 User (67%)`.  
+   Amir sebagai Owner/Admin **sama sekali tidak bisa melihat siapa 2 user yang sudah selesai dan siapa 1 user yang belum selesai**.
+2. **Ketiadaan Umpan Balik Status Perorangan:**  
+   Karena tidak tahu siapa yang belum selesai, Amir berasumsi: *"Saya tadi sudah buka 3 akun, kenapa tidak 100%?"*.  
+   Jika ada menu pop-up rincian, Amir bisa langsung melihat di layarnya:
+   - ✅ `01 PENGANTARAN`: Selesai (17:23 WITA)
+   - ✅ `02 PENGANTARAN`: Selesai (18:55 WITA)
+   - ⏳ `TAMARA BANGUNAN`: Belum Selesai (Menunggu Pengerjaan)  
+   Dengan begitu, Amir seketika tahu bahwa yang belum tuntas adalah akun `TAMARA BANGUNAN`, tanpa perlu komplain atau bingung!
+3. **Kesimpulan:**  
+   Permintaan Amir: *"Sama kalau bisa kolom keterangan penyelesaian di klik menampilkan menu pop up..."* adalah **SOLUSI TERBAIK DAN PALING TEPAT SASARAN**. Fitur ini membedah "black box" menjadi transparan 100%.
 
 ---
 
-### Solusi 3: Perbaikan Logika Folder "Terjadwal" -> "Belum Selesai" di `getEffectiveSopStatus`
-* **File Target:** `tb-delivery-pro/index.html` (Fungsi `getEffectiveSopStatus` baris ~51883).
-* **Perubahan Logika Presedensi:**
-  ```javascript
-  // 1. DRAFT SELALU DRAFT
-  if (stLower === 'draft' || stLower === 'draf') return 'Draft';
+## 2. HASIL AUDIT TEKNIS DATABASE SUPABASE (LIVE PRODUCTION DATA)
 
-  // 2. STATUS SELESAI (Semua user selesai / 100%)
-  if (progress.isAllCompleted || (progress.totalAssigned <= 1 && isDoneToday)) return 'Selesai';
+Audit langsung yang dijalankan via API Supabase menunjukkan:
 
-  // 3. ATURAN KRUSIAL MULTI-USER: JIKA SUDAH ADA SEBAGIAN USER YANG SELESAI (completedCount > 0):
-  // Status MUTLAK "Belum Selesai" dan WAJIB berada di folder "Belum Selesai"!
-  // Aturan ini MENDAHULUI status manual terbit/terjadwal!
-  if (progress.completedCount > 0) {
-      return 'Belum Selesai';
+```json
+// Tabel: sop_masters
+{
+  "id": "SOP-1794043247520",
+  "title": "Pengantaran Muatan Berat & Semen",
+  "status": "Belum Selesai"
+}
+
+// Tabel: sop_targets
+{
+  "sop_id": "SOP-1794043247520",
+  "target_users": [
+    "USR-002", "USR-004", "USR-005",
+    "staff2", "driver1", "driver2",
+    "TAMARA BANGUNAN", "01   PENGANTARAN", "02   PENGANTARAN"
+  ]
+}
+// Total Distinct Assigned: 3 User (USR-002, USR-004, USR-005)
+
+// Tabel: sop_execution_logs
+[
+  {
+    "id": "LOG-1794043396950-427",
+    "sop_id": "SOP-1794043247520",
+    "username": "USR-004",
+    "full_name": "01   PENGANTARAN",
+    "role": "Sopir",
+    "completed_at": "2026-11-07T09:23:16.950Z (17:23 WITA)",
+    "status": "Selesai"
+  },
+  {
+    "id": "LOG-1794048909658-115",
+    "sop_id": "SOP-1794043247520",
+    "username": "USR-005",
+    "full_name": "02   PENGANTARAN",
+    "role": "Sopir",
+    "completed_at": "2026-11-07T10:55:09.661Z (18:55 WITA)",
+    "status": "Selesai"
   }
-
-  // 4. JIKA BELUM ADA USER SELESAI (0 User Selesai):
-  // Cek apakah waktu jadwal sudah tiba hari ini
-  const isDue = isSopScheduleTimeDue(sop, todayKey);
-  if (isDue) {
-      return 'Belum Selesai';
-  }
-
-  // 5. Default jika belum tiba jamnya:
-  return 'Terjadwal';
-  ```
-  Dengan perubahan ini:
-  - Kartu dengan progres `1/3 User (33%)` **100% dipastikan otomatis berpindah ke tab "Belum Selesai"** dan ber-badge kuning *"Belum Selesai"*, persis seperti yang diminta Amir!
-
----
-
-### Solusi 4: Mekanisme Overdue Catch-Up Notifikasi Saat Login Terlambat
-* **File Target:** `tb-delivery-pro/index.html` (Fungsi `checkSopScheduleBackgroundTrigger` & `handleSopBroadcastData`).
-* **Perubahan Kode:**
-  - Saat `checkSopScheduleBackgroundTrigger` dieksekusi pasca-login:
-    Jika jam saat ini sudah melebihi jam jadwal SOP (`curWitaMin >= schMin`), dan user tersebut belum menyelesaikan SOP pada hari ini (`!isCompletedToday`), sistem langsung menetapkan slot tersebut sebagai `latestDueSlot` dan memicu alarm popup notifikasi seketika (tanpa harus menunggu pergantian menit berikutnya).
-  - Pastikan kunci `slotAckKey` dan `lastPopKey` menyertakan `userKey` spesifik:
-    `'tb_sop_ack_slot_' + idSop + '_' + userKey + '_' + todayKey + '_' + cleanSlotId`.
-
----
-
-### Solusi 5: Sinkronisasi Realtime Progres Multi-User dari Supabase
-* **File Target:** `tb-delivery-pro/supabase-gas-adapter.js` (Fungsi `getActiveSopBroadcast`).
-* **Perubahan Kode:**
-  - Tambahkan kalkulasi `multi_user_progress` (`total_assigned`, `completed_count`, `completed_by`, `percentage`) ke dalam setiap objek SOP yang dikembalikan oleh `getActiveSopBroadcast`.
-  - Ketika ponsel admin atau staf melakukan polling heartbeat atau sinkronisasi, progres multi-user terupdate otomatis secara live tanpa perlu me-refresh halaman browser.
-
----
-
-## 4. TEMPLATE JAWABAN PROFESIONAL UNTUK KLIEN AMIR
-
-Anda dapat menyalin pesan berikut untuk dikirimkan ke Amir via WhatsApp:
-
-```text
-Halo Pak Amir, terima kasih banyak atas detail pengujiannya yang sangat jelas dan membantu. 🙏
-
-Terkait hasil pengujian tadi, kami ingin menjelaskan:
-1. Mengenai Notifikasi Multi-User:
-Di lapangan nanti, Pengantaran 1, Pengantaran 2, dan Staff 2 masing-masing memegang HP sendiri. Notifikasi jam 17.35 akan berdering serentak di HP masing-masing.
-Tadi di HP Pak Amir tidak muncul di akun kedua/ketiga karena diuji secara bergantian di 1 HP yang sama. Di sistem kami sebelumnya, ketika Akun 1 selesai mengerjakan SOP di HP tersebut, browser masih menyimpan catatan lokal bahwa "SOP di HP ini sudah selesai", sehingga ketika Pak Amir login Akun 2 di HP yang sama, sistem salah mendeteksi bahwa Akun 2 sudah menyelesaikannya.
-
-2. Mengenai Kartu SOP di Folder "Terjadwal":
-Pak Amir 100% benar. Seharusnya begitu Akun 1 selesai (1/3 User - 33%), kartu SOP otomatis berpindah ke tab "Belum Selesai", bukan menetap di "Terjadwal". Kemarin ada pembacaan status jadwal yang mengunci kartu tersebut.
-
-Saat ini kami sudah menyiapkan perbaikan menyeluruh:
-- Pembersihan memori cache total saat logout (sehingga dites gonta-ganti akun di 1 HP pun notifikasi akan tetap berbunyi normal).
-- Kartu SOP otomatis pindah ke folder "Belum Selesai" begitu ada 1 staf yang mulai mengerjakan (progres 1/3, 2/3, dst).
-- Jika staf telat login (misal jadwal 17.35 baru login 17.37), alarm notifikasi akan langsung muncul saat login.
-
-Perbaikan sedang kami proses sekarang ya Pak. 🙏
+]
+// LOG KETIGA (USR-002 / TAMARA BANGUNAN) TIDAK ADA DI DATABASE!
 ```
 
 ---
 
-## 5. RENCANA AKSI & STATUS PERSETUJUAN
+## 3. RANCANGAN SOLUSI LENGKAP (v7.1.0)
 
-| No | Modul / Komponen | Tindakan | File |
-|---|---|---|---|
-| 1 | Multi-User Isolation | Hapus `is_user_completed` dari cache master, hitung dinamis per user aktif | `tb-delivery-pro/index.html` |
-| 2 | Hard Session Teardown | Reset `window._activeSopNotificationData = null` dan pembersihan cache logout | `tb-delivery-pro/index.html` |
-| 3 | Folder Status Precedence | Prioritaskan `completedCount > 0` menjadi `'Belum Selesai'` di `getEffectiveSopStatus` | `tb-delivery-pro/index.html` |
-| 4 | Overdue Catch-Up Trigger | Picu alarm seketika jika login melewati jam jadwal dan belum selesai | `tb-delivery-pro/index.html` |
-| 5 | Realtime Progress Sync | Sertakan `multi_user_progress` lengkap di `getActiveSopBroadcast` | `tb-delivery-pro/supabase-gas-adapter.js` |
-| 6 | Deployment & Verifikasi | Verifikasi syntax, deploy ke Vercel production, dan uji login multi-user | Produksi Live |
+Untuk memenuhi permintaan klien Amir dan menyelesaikan masalah ini secara tuntas:
 
-> **PERINGATAN PROTOKOL ZETTBOT:**  
-> Sesuai SOP ZettBOT, kode aplikasi **BELUM DIUBAH SAMA SEKALI** pada sesi ini.  
-> Untuk menerapkan seluruh solusi perbaikan di atas secara otomatis ke codebase dan mendeploy ke produksi, silakan ketik:  
-> **`/zettbot OKE TERAPKAN`**
+---
+
+### Solusi 1: Modal Pop-up Interaktif "Rincian Penyelesaian Multi-User" (User Completion Breakdown Modal)
+* **File Target:** `tb-delivery-pro/index.html` (Fungsi `renderSopListCards`, `openSopUserCompletionBreakdownModal`).
+* **Mekanisme UI:**
+  1. Ubah badge `Penyelesaian: X/Y User (Z%)` di kartu SOP menjadi tombol interaktif yang jelas bisa diklik (`cursor-pointer hover:bg-blue-100 active:scale-95 transition` dengan ikon `fa-users-gear` dan tooltip/indikator info).
+  2. Ketika tombol diklik, panggil `openSopUserCompletionBreakdownModal(sopId)`.
+  3. Modal menampilkan:
+     - **Header:** Judul SOP, Kategori, Tanggal Jadwal, dan Tombol Tutup (X).
+     - **Visual Progress Bar:** Total persentase penyelesaian (misal 67%) dengan indikator jumlah user: `2 dari 3 User Selesai`.
+     - **Daftar Lengkap Seluruh User yang Ditugaskan:**
+       - Menampilkan avatar inisial, nama staf, dan role (Sopir / Staff Toko).
+       - **Status Hijau (✅ Sudah Selesai):** Jam selesai (WITA), checklist 100%, serta tombol/thumbnail *"Lihat Foto Bukti"* (jika ada unggahan foto).
+       - **Status Amber/Abu-abu (⏳ Belum Mengerjakan):** Indikator jam pasir dengan keterangan *"Menunggu pengerjaan SOP hari ini"*.
+     - **Tombol Muat Ulang (Refresh Data):** Untuk menarik data terbaru langsung dari Supabase tanpa harus memuat ulang seluruh halaman web.
+
+---
+
+### Solusi 2: Penguatan Submit Eksekusi Multi-Step & Penegasan Notifikasi Selesai
+* **File Target:** `tb-delivery-pro/index.html` (Fungsi `finishSopExecution`, `handleDynamicExecutionSubmit`).
+* **Penyempurnaan:**
+  1. **Feedback Visual Submit:** Saat user menekan tombol *"KIRIM BUKTI & SELESAIKAN"*, tampilkan loading spinner di dalam tombol dan blokir interaksi ganda.
+  2. **Konfirmasi Sukses Spesifik Akun:** Ketika modal sukses muncul, tampilkan pesan gamblang:  
+     `"SOP Berhasil Diselesaikan oleh [Nama User]! Progres saat ini: X/Y User (Z%)"`.  
+     Jika user yang baru submit adalah user terakhir (100%), tambahkan teks:  
+     `"🎉 Seluruh user telah selesai! SOP otomatis dipindahkan ke folder SELESAI."`
+  3. **Pengiriman Parameter Tanggal Sinkron:** Pastikan `payload.tanggal` selalu menyertakan `todayKey` (format tanggal WITA lokal) agar query pencocokan log di backend selalu 100% konsisten.
+
+---
+
+### Solusi 3: Deduplikasi User pada Perhitungan Backend (`supabase-gas-adapter.js`)
+* **File Target:** `tb-delivery-pro/supabase-gas-adapter.js` (Fungsi `submitSopExecutionLog`).
+* **Penyempurnaan:**
+  1. Gunakan `Set` identitas pengguna unik (`username` / `full_name` / `user_id`) saat menghitung `completedCount` dari log Supabase. Hal ini mencegah salah hitung jika seorang pengguna tanpa sengaja men-submit log lebih dari sekali.
+  2. Ketika `completedCount >= totalAssigned`:
+     - Update status tabel `sop_masters.status = 'Selesai'`.
+     - Kembalikan respon `new_status: 'Selesai'` ke klien.
+     - Pemicu realtime WebSocket akan seketika memindahkan kartu ke folder tab "Selesai" di seluruh perangkat.
+
+---
+
+## 4. DRAFT PESAN WHATSAPP UNTUK KLIEN AMIR
+
+Berikut draf balasan yang ramah, profesional, dan meyakinkan untuk dikirimkan kepada Amir:
+
+```text
+Halo Mas Amir, terima kasih banyak atas masukannya! 🙏
+
+Setelah kami cek langsung ke server database:
+1. Ternyata untuk SOP "Pengantaran Muatan Berat & Semen", di sistem baru tercatat 2 user yang selesai:
+   - Pengantaran 1 (Selesai jam 17.23 WITA)
+   - Pengantaran 2 (Selesai jam 18.55 WITA)
+   Sedangkan untuk akun ke-3 (Staff 2) log penyelesaiannya belum masuk ke database (kemungkinan tadi saat klik selesai belum tuntas terkirim atau ada checklist yang terlewat). Karena sistem menghitung baru 2 dari 3 user (67%), maka kartu tetap di folder "Belum Selesai".
+
+2. Masukan Mas Amir sangat bagus sekali! Kami sedang menambahkan fitur:
+   👉 Keterangan "Penyelesaian: 2/3 User" sekarang BISA DIKLIK, dan akan muncul pop-up menu yang menampilkan:
+   - Siapa saja user yang SUDAH selesai beserta jam selesainya dan foto buktinya.
+   - Siapa saja user yang BELUM selesai (masih menunggu).
+
+Dengan fitur ini, Mas Amir bisa langsung tahu persis staf mana yang belum menyelesaikan tugasnya dengan sekali klik.
+
+Segera kami update ya mas! Terima kasih banyak atas masukannya yang sangat membantu. 👍
+```
+
+---
+
+## 5. STATUS KESIAPAN EKSEKUSI
+- **Kondisi Kode Saat Ini:** Utuh dan tidak disentuh sebelum konfirmasi.
+- **Langkah Berikutnya:** Tunggu konfirmasi perintah `/zettbot OKE TERAPKAN` dari pengguna untuk memulai pengkodean Solusi 1, Solusi 2, dan Solusi 3.
