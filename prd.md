@@ -244,6 +244,12 @@ Untuk menjamin 100% konsistensi visual dan perilaku antara versi Apps Script lam
   - **Audio Chime & Live Toast untuk Admin:** Memberikan feedback visual dan audio instan ke layar Admin saat karyawan menyelesaikan SOP (`"SOP Selesai: [Nama Karyawan] telah menyelesaikan SOP!"`).
   - **Cache Buster & Live Production Deployment:** Bumping versi skrip adapter ke `?v=6.8.0`, commit, push ke GitHub `main`, deployment Vercel Edge Network, dan verifikasi live di `https://tmr-app.vercel.app`.
 
+- **v6.9.0 (7 November 2026 - Mandatory Photo Upload Gatekeeper, Hard Logout Teardown Resilience & Browser Credential Audit):**
+  - **Enforcement Aturan "Wajib Upload Bukti" SOP:** Memperbaiki mapping data contract backend `supabase-gas-adapter.js` (`rules: s.rules || {}, aturan: s.rules || {}`) dan frontend `index.html` (`step.aturan || step.rules || {}`). Tombol "SIMPAN & LANJUT KE LANGKAH" / "KIRIM BUKTI & SELESAIKAN" kini secara ketat terkunci (disabled) selama foto bukti belum diunggah sesuai batas minimal foto yang ditetapkan. Header kartu foto secara dinamis menampilkan label merah `Foto Bukti Wajib (Minimal X Foto) *` jika toggle ON, dan abu-abu opsional jika toggle OFF.
+  - **Hard Teardown Logout Resilience:** Memberantas bug terjebak di menu pesanan tanpa tombol logout. Membersihkan seluruh storage keys (`tb_auth_token`, `tb_tamara_user`, dan `tb_tamara_current_user`), menghentikan background intervals/realtime, dan mengeksekusi `window.location.replace` agar seluruh memori JavaScript dan siklus hidup peramban mobile Safari/Chrome dihancurkan bersih kembali ke landing screen login murni.
+  - **Mitigasi Audit Sandi Browser ("Check your saved password"):** Mengidentifikasi akar masalah peringatan pop-up browser (Google Password Checkup / iCloud Keychain) akibat penggunaan sandi default yang pasaran (`admin123`, `driver123`). Menyediakan rekomendasi penguatan kredensial serta menambahkan atribut form `autocomplete="username"`, `autocomplete="current-password"`, dan `data-lpignore="true"` pada input login.
+  - **Cache Buster & Live Production Deployment:** Bumping versi skrip adapter ke `?v=6.9.0`, commit, push ke GitHub `main`, deployment Vercel Edge Network, dan sinkronisasi ke domain resmi `https://tmr-app.vercel.app`.
+
 ================================================================================
 ARSITEK: ZettBOT by Zettbos | STATUS: PRODUCTION READY | LIVING MASTER CONTEXT
 ================================================================================

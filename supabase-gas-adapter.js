@@ -5254,7 +5254,8 @@
                         checklist: s.checklist || s.checklist_items || [],
                         items_checklist: s.checklist || s.checklist_items || [],
                         media_contoh: s.media_examples || [],
-                        rules: s.rules || {}
+                        rules: s.rules || {},
+                        aturan: s.rules || {}
                     });
                 });
 
@@ -5491,7 +5492,8 @@
                             judul_langkah: s.step_title || s.step_name || 'Langkah',
                             instruksi_langkah: s.user_instructions || s.instructions || '',
                             items_checklist: s.checklist || s.checklist_items || [],
-                            rules: s.rules || {}
+                            rules: s.rules || {},
+                            aturan: s.rules || {}
                         })),
                         jadwal: {
                             jam_tayang: times,
@@ -7146,6 +7148,7 @@
                         instruksi_langkah: s.user_instructions || '',
                         checklist: Array.isArray(s.checklist) ? s.checklist : [],
                         media_contoh: Array.isArray(s.media_examples) ? s.media_examples : [],
+                        rules: s.rules || {},
                         aturan: s.rules || {}
                     });
                 });

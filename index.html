@@ -508,7 +508,7 @@
 
     <!-- SUPABASE CLIENT & UNIVERSAL ADAPTER (MENGGANTIKAN GOOGLE APPS SCRIPT) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./supabase-gas-adapter.js?v=6.8.0"></script>
+    <script src="./supabase-gas-adapter.js?v=6.9.0"></script>
 
 </head>
 
@@ -646,7 +646,7 @@
                             <div class="relative">
                                 <span class="absolute left-3 top-3 text-slate-400 text-xs"><i
                                         class="fa-solid fa-user"></i></span>
-                                <input type="text" id="loginUsername" required
+                                <input type="text" id="loginUsername" required autocomplete="username" data-lpignore="true"
                                     class="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-brandBlue text-xs font-semibold shadow-sm"
                                     placeholder="Masukkan username Anda">
                             </div>
@@ -657,7 +657,7 @@
                             <div class="relative">
                                 <span class="absolute left-3 top-3 text-slate-400 text-xs"><i
                                         class="fa-solid fa-lock"></i></span>
-                                <input type="password" id="loginPassword" required
+                                <input type="password" id="loginPassword" required autocomplete="current-password" data-lpignore="true"
                                     class="w-full pl-9 pr-9 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-brandBlue text-xs font-semibold shadow-sm"
                                     placeholder="••••••••">
                                 <button type="button"
@@ -54235,9 +54235,11 @@
             const card = document.createElement('div');
             card.className = cardBg + ' border rounded-2xl p-3 flex items-center justify-between shadow-2xs transition group';
 
+            const stAturan = step.aturan || step.rules || {};
+            const isWajibUpload = Boolean(stAturan.wajib_upload === true || String(stAturan.wajib_upload).toLowerCase() === 'true' || stAturan.wajib_upload === 1 || String(stAturan.wajib_upload) === '1');
             let badgesHtml = '<span class="px-2 py-0.5 rounded-full text-[9.5px] font-black bg-blue-100 text-blue-700">Checklist wajib</span>';
-            if (step.aturan && step.aturan.wajib_upload) {
-                const fotoCountText = step.aturan.jumlah_foto ? ('Upload ' + step.aturan.jumlah_foto) : 'Foto Wajib';
+            if (isWajibUpload) {
+                const fotoCountText = stAturan.jumlah_foto ? ('Upload ' + stAturan.jumlah_foto) : 'Foto Wajib';
                 badgesHtml += ' <span class="px-2 py-0.5 rounded-full text-[9.5px] font-black bg-rose-100 text-rose-700"><i class="fa-solid fa-camera text-[8px] mr-1"></i>' + fotoCountText + '</span>';
             } else {
                 badgesHtml += ' <span class="px-2 py-0.5 rounded-full text-[9.5px] font-bold bg-slate-100 text-slate-600"><i class="fa-solid fa-camera text-[8px] mr-1"></i>Foto Opsional</span>';
@@ -54405,10 +54407,11 @@
         const ruleFoto = document.getElementById('sopRuleJumlahFoto');
         const ruleSelesai = document.getElementById('sopRuleHarusSelesai');
 
-        if (ruleCheck) ruleCheck.checked = step.aturan ? Boolean(step.aturan.wajib_checklist) : true;
-        if (ruleUpload) ruleUpload.checked = step.aturan ? Boolean(step.aturan.wajib_upload) : true;
-        if (ruleFoto && step.aturan && step.aturan.jumlah_foto) ruleFoto.value = step.aturan.jumlah_foto;
-        if (ruleSelesai) ruleSelesai.checked = step.aturan ? Boolean(step.aturan.harus_selesai) : true;
+        const sAturan = step.aturan || step.rules || {};
+        if (ruleCheck) ruleCheck.checked = sAturan.wajib_checklist !== undefined ? Boolean(sAturan.wajib_checklist) : true;
+        if (ruleUpload) ruleUpload.checked = sAturan.wajib_upload !== undefined ? Boolean(sAturan.wajib_upload) : true;
+        if (ruleFoto && sAturan.jumlah_foto) ruleFoto.value = sAturan.jumlah_foto;
+        if (ruleSelesai) ruleSelesai.checked = sAturan.harus_selesai !== undefined ? Boolean(sAturan.harus_selesai) : true;
 
         renderChecklistInputs(step.checklist || []);
 
@@ -57949,7 +57952,7 @@
                                 st.media_contoh = mStep.media_contoh;
                             }
                             if (!st.aturan || Object.keys(st.aturan).length === 0) {
-                                st.aturan = mStep.aturan;
+                                st.aturan = mStep.aturan || mStep.rules || {};
                             }
                         }
                     });
@@ -58023,14 +58026,24 @@
                     checklistTexts = [sTitle];
                 }
 
-                const sAturan = step.aturan || {};
+                const sAturan = step.aturan || step.rules || {};
                 const requirePhoto = Boolean(sAturan.wajib_upload === true || String(sAturan.wajib_upload).toLowerCase() === 'true' || sAturan.wajib_upload === 1 || String(sAturan.wajib_upload) === '1');
+                let minPhotos = 0;
+                if (requirePhoto) {
+                    minPhotos = 1;
+                    const jf = String(sAturan.jumlah_foto || '').toLowerCase();
+                    const mMatch = jf.match(/minimal\s*(\d+)/i) || jf.match(/^(\d+)\s*foto/i);
+                    if (mMatch && parseInt(mMatch[1], 10) > 0) {
+                        minPhotos = parseInt(mMatch[1], 10);
+                    }
+                }
 
                 return {
                     no_urut: idx + 1,
                     judul_langkah: sTitle,
                     petunjuk_user: sPetunjuk,
                     requirePhoto: requirePhoto,
+                    minPhotos: minPhotos,
                     aturan: sAturan,
                     checklists: checklistTexts.map(txt => ({ text: txt, checked: false })),
                     photos: [],
@@ -58155,7 +58168,8 @@
             card.className = 'bg-white rounded-2xl p-3 sm:p-3.5 flex items-center space-x-3.5 shadow-md border border-slate-100/90 transition text-slate-800';
 
             const cCount = (step.checklist && step.checklist.length) || 0;
-            const isPhotoWajib = step.aturan && step.aturan.wajib_upload;
+            const stAturan = step.aturan || step.rules || {};
+            const isPhotoWajib = Boolean(stAturan.wajib_upload === true || String(stAturan.wajib_upload).toLowerCase() === 'true' || stAturan.wajib_upload === 1 || String(stAturan.wajib_upload) === '1');
             const mediaList = step.media_contoh || [];
 
             const rawNama = step.nama_langkah || ('Langkah ' + (idx + 1));
@@ -58257,7 +58271,7 @@
                                     st.media_contoh = mStep.media_contoh;
                                 }
                                 if (!st.aturan || Object.keys(st.aturan).length === 0) {
-                                    st.aturan = mStep.aturan;
+                                    st.aturan = mStep.aturan || mStep.rules || {};
                                 }
                             }
                         });
@@ -59528,22 +59542,24 @@
             photoSection.classList.remove('hidden');
             const labelFoto = document.getElementById('sopDynamicPhotoSectionLabel') || photoSection.querySelector('.font-black');
             const subLabelFoto = document.getElementById('sopDynamicPhotoSectionSubLabel') || photoSection.querySelector('.font-bold.text-slate-400');
-            const ruleJumlah = (currentStep.aturan && currentStep.aturan.jumlah_foto) ? currentStep.aturan.jumlah_foto : 'Minimal 1 • Maksimal 3';
+            const sAturan = currentStep.aturan || currentStep.rules || {};
+            const minReq = currentStep.minPhotos || (currentStep.requirePhoto ? 1 : 0);
+            const ruleJumlah = sAturan.jumlah_foto || (minReq > 0 ? ('Minimal ' + minReq + ' Foto') : 'Minimal 1 • Maksimal 3');
 
             if (currentStep.requirePhoto) {
                 // WAJIB UPLOAD FOTO (Toggle ON)
                 if (labelFoto) {
-                    labelFoto.className = 'font-black text-rose-600 flex items-center gap-1';
-                    labelFoto.innerHTML = '<i class="fa-solid fa-camera text-rose-500"></i><span>Foto upload (wajib ' + ruleJumlah + ')</span>';
+                    labelFoto.className = 'font-black text-rose-600 flex items-center gap-1.5 text-xs';
+                    labelFoto.innerHTML = '<i class="fa-solid fa-camera-retro text-rose-500"></i><span>Foto Bukti Wajib (' + ruleJumlah + ')</span><span class="text-rose-500 font-extrabold">*</span>';
                 }
                 if (subLabelFoto) {
-                    subLabelFoto.className = 'font-bold text-rose-400 text-[10px]';
-                    subLabelFoto.innerText = '(Maksimal 5 foto • Wajib diisi)';
+                    subLabelFoto.className = 'font-bold text-rose-500 text-[10.5px]';
+                    subLabelFoto.innerText = '(Wajib unggah minimal ' + minReq + ' foto agar tombol aktif • Maksimal 5 foto)';
                 }
             } else {
                 // OPSIONAL UPLOAD FOTO (Toggle OFF)
                 if (labelFoto) {
-                    labelFoto.className = 'font-black text-slate-700 flex items-center gap-1';
+                    labelFoto.className = 'font-black text-slate-700 flex items-center gap-1 text-xs';
                     labelFoto.innerHTML = '<i class="fa-solid fa-camera text-blue-500"></i><span>Foto upload (opsional)</span>';
                 }
                 if (subLabelFoto) {
@@ -59633,7 +59649,8 @@
 
         if (currentStep.requirePhoto) {
             totalTasks += 1;
-            if (currentStep.photos && currentStep.photos.length >= 1) completedTasks += 1;
+            const minReq = currentStep.minPhotos || 1;
+            if (currentStep.photos && currentStep.photos.length >= minReq) completedTasks += 1;
         }
 
         if (isLastStep) {
@@ -59670,18 +59687,42 @@
 
         const isLastStep = (stepIdx === totalSteps - 1);
         const allChecked = Array.isArray(currentStep.checklists) ? currentStep.checklists.every(c => c && c.checked) : true;
-        const hasPhoto = !currentStep.requirePhoto || (currentStep.photos && currentStep.photos.length >= 1);
+        const minReq = currentStep.requirePhoto ? (currentStep.minPhotos || 1) : 0;
+        const photoCount = (currentStep.photos && currentStep.photos.length) || 0;
+        const hasPhoto = !currentStep.requirePhoto || (photoCount >= minReq);
         const isConf = !isLastStep || Boolean(window._sopExecutionState.confirmed);
         const isReady = allChecked && hasPhoto && isConf;
 
         if (isLastStep) {
             if (btnText) btnText.innerText = 'KIRIM BUKTI & SELESAIKAN';
             if (btnIcon) btnIcon.className = 'fa-solid fa-check text-xs';
-            if (hintEl) hintEl.innerText = 'Tombol selesaikan aktif setelah checklist' + (currentStep.requirePhoto ? ', foto wajib,' : '') + ' dan konfirmasi dicentang.';
+            if (hintEl) {
+                if (!allChecked && !hasPhoto) {
+                    hintEl.innerText = 'Tombol aktif setelah seluruh checklist dicentang dan ' + minReq + ' foto bukti diunggah.';
+                } else if (!allChecked) {
+                    hintEl.innerText = 'Tombol aktif setelah seluruh checklist dicentang.';
+                } else if (!hasPhoto) {
+                    hintEl.innerText = 'Wajib upload minimal ' + minReq + ' foto bukti untuk mengaktifkan tombol.';
+                } else if (!isConf) {
+                    hintEl.innerText = 'Centang kotak konfirmasi bahwa SOP telah dilaksanakan.';
+                } else {
+                    hintEl.innerText = 'Seluruh checklist & foto lengkap. Siap selesaikan SOP!';
+                }
+            }
         } else {
             if (btnText) btnText.innerText = 'SIMPAN & LANJUT KE LANGKAH ' + (stepIdx + 2);
             if (btnIcon) btnIcon.className = 'fa-solid fa-chevron-right text-xs';
-            if (hintEl) hintEl.innerText = 'Tombol simpan & lanjut aktif setelah checklist' + (currentStep.requirePhoto ? ' dan foto wajib lengkap.' : ' lengkap.');
+            if (hintEl) {
+                if (!allChecked && !hasPhoto) {
+                    hintEl.innerText = 'Tombol simpan & lanjut aktif setelah checklist dan ' + minReq + ' foto bukti wajib diunggah.';
+                } else if (!allChecked) {
+                    hintEl.innerText = 'Tombol simpan & lanjut aktif setelah checklist lengkap.';
+                } else if (!hasPhoto) {
+                    hintEl.innerText = 'Wajib upload minimal ' + minReq + ' foto bukti untuk mengaktifkan tombol.';
+                } else {
+                    hintEl.innerText = 'Checklist & foto lengkap. Siap lanjut ke langkah berikutnya.';
+                }
+            }
         }
 
         btn.disabled = !isReady;
@@ -59707,7 +59748,9 @@
 
         const isLastStep = (stepIdx === totalSteps - 1);
         const allChecked = Array.isArray(currentStep.checklists) ? currentStep.checklists.every(c => c && c.checked) : true;
-        const hasPhoto = !currentStep.requirePhoto || (currentStep.photos && currentStep.photos.length >= 1);
+        const minReq = currentStep.requirePhoto ? (currentStep.minPhotos || 1) : 0;
+        const photoCount = (currentStep.photos && currentStep.photos.length) || 0;
+        const hasPhoto = !currentStep.requirePhoto || (photoCount >= minReq);
         const isConf = !isLastStep || Boolean(window._sopExecutionState.confirmed);
 
         if (!allChecked) {
@@ -59716,7 +59759,7 @@
         }
 
         if (!hasPhoto) {
-            showCustomToast('Harap upload minimal 1 foto bukti sebelum lanjut.', 'warning');
+            showCustomToast('Wajib upload minimal ' + minReq + ' foto bukti sebelum lanjut!', 'warning');
             return;
         }
 
@@ -64118,6 +64161,8 @@
                 tokenToRevoke = localStorage.getItem('tb_auth_token') || '';
                 localStorage.removeItem('tb_auth_token');
                 localStorage.removeItem('tb_tamara_user');
+                localStorage.removeItem('tb_tamara_current_user');
+                sessionStorage.clear();
             } catch (e) {}
 
             try {
@@ -64147,9 +64192,11 @@
         }
         window.clearPersistentAuthSession = clearPersistentAuthSession;
 
-        function handleLogoutDirect(reason) {
+        async function handleLogoutDirect(reason) {
             document.documentElement.classList.remove('user-pre-authenticated');
+            await clearPersistentAuthSession();
             currentUser = null;
+            window.currentUser = null;
             window._serverCompletedSopIdsSet = new Set();
             if (typeof closeModulSOP === 'function') closeModulSOP();
             window._sopMasterDataCache = null;
@@ -64172,6 +64219,14 @@
                 showEmployeeLoginForm();
             }
             if (reason) showToast(reason, 'warning');
+
+            setTimeout(() => {
+                try {
+                    window.location.replace(window.location.origin + window.location.pathname);
+                } catch (e) {
+                    window.location.reload();
+                }
+            }, 500);
         }
 
         function handleLogout() {
@@ -64182,9 +64237,11 @@
                 iconBg: 'bg-red-100 text-brandRed',
                 confirmText: 'Ya, Keluar',
                 confirmClass: 'bg-brandRed hover:bg-red-700 text-white shadow-red-500/20',
-                onConfirm: function () {
-                    clearPersistentAuthSession();
+                onConfirm: async function () {
+                    document.documentElement.classList.remove('user-pre-authenticated');
+                    await clearPersistentAuthSession();
                     currentUser = null;
+                    window.currentUser = null;
                     window._serverCompletedSopIdsSet = new Set();
                     if (typeof closeModulSOP === 'function') closeModulSOP();
                     window._sopMasterDataCache = null;
@@ -64215,7 +64272,15 @@
                         showEmployeeLoginForm();
                     }
 
-                    showToast('Anda telah berhasil keluar.', 'info');
+                    showToast('Anda telah berhasil keluar...', 'info');
+
+                    setTimeout(() => {
+                        try {
+                            window.location.replace(window.location.origin + window.location.pathname);
+                        } catch (e) {
+                            window.location.reload();
+                        }
+                    }, 400);
                 }
             });
         }
@@ -64269,15 +64334,15 @@
         }
         setInterval(checkShiftExpiryTimer, 15000);
 
-        function executeShiftLogout() {
+        async function executeShiftLogout() {
             isShiftExpiryPromptShown = false;
             const modal = document.getElementById('shiftExpiryModal');
             if (modal) modal.classList.add('hidden');
 
-            try {
-                localStorage.removeItem('tb_tamara_user');
-            } catch (e) { }
+            document.documentElement.classList.remove('user-pre-authenticated');
+            await clearPersistentAuthSession();
             currentUser = null;
+            window.currentUser = null;
 
             if (typeof stopAdminBBMPolling === 'function') stopAdminBBMPolling();
             if (typeof stopDriverBBMPolling === 'function') stopDriverBBMPolling();
@@ -64302,6 +64367,14 @@
             }
 
             showToast('Masa shift kerja Anda telah selesai. Silakan login kembali pada shift berikutnya.', 'info');
+
+            setTimeout(() => {
+                try {
+                    window.location.replace(window.location.origin + window.location.pathname);
+                } catch (e) {
+                    window.location.reload();
+                }
+            }, 600);
         }
 
         // ==========================================
